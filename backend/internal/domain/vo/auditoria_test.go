@@ -246,39 +246,54 @@ func TestDetectarFormatoNoLimiteDoPrefixo(t *testing.T) {
 	}
 }
 
-// TestConferirPacoteDocxComListaSuja garante que duplicata e entrada vazia na
-// lista de partes do ZIP não confundem a conferência.
+// TestConferirPacoteDocxComListaSuja garante que duplicata e entrada de nome
+// vazio dentro do ZIP não confundem a conferência.
 func TestConferirPacoteDocxComListaSuja(t *testing.T) {
 	t.Parallel()
 
+	obrigatorias := docxPartesObrigatorias()
+
 	casos := []struct {
-		nome    string
-		partes  []string
-		temErro bool
+		nome     string
+		entradas []entradaZip
+		temErro  bool
 	}{
 		{
-			nome:    "partes obrigatórias duplicadas",
-			partes:  []string{ParteContentTypes, ParteContentTypes, ParteDocumentoPrincipal, ParteDocumentoPrincipal},
+			nome:     "partes obrigatórias duplicadas",
+			entradas: []entradaZip{obrigatorias[0], obrigatorias[0], obrigatorias[1], obrigatorias[1]},
+			temErro:  false,
+		},
+		{
+			nome: "entradas de nome vazio no meio da lista",
+			entradas: []entradaZip{
+				entradaDeflate("", []byte("x")),
+				obrigatorias[0],
+				entradaDeflate("", []byte("x")),
+				obrigatorias[1],
+				entradaDeflate("", []byte("x")),
+			},
 			temErro: false,
 		},
 		{
-			nome:    "entradas vazias no meio da lista",
-			partes:  []string{"", ParteContentTypes, "", ParteDocumentoPrincipal, ""},
-			temErro: false,
-		},
-		{
-			nome:    "lista só de entradas vazias",
-			partes:  []string{"", "", ""},
+			nome: "zip só de entradas de nome vazio",
+			entradas: []entradaZip{
+				entradaDeflate("", []byte("x")),
+				entradaDeflate("", []byte("y")),
+				entradaDeflate("", []byte("z")),
+			},
 			temErro: true,
 		},
 		{
-			nome:    "documento principal com prefixo de diretório errado",
-			partes:  []string{ParteContentTypes, "xl/word/document.xml"},
-			temErro: true,
+			nome:     "documento principal com prefixo de diretório errado",
+			entradas: []entradaZip{obrigatorias[0], entradaDeflate("xl/word/document.xml", conteudoDocumentoMinimo)},
+			temErro:  true,
 		},
 		{
-			nome:    "partes com caixa alta não valem",
-			partes:  []string{"[CONTENT_TYPES].XML", "WORD/DOCUMENT.XML"},
+			nome: "partes com caixa alta não valem",
+			entradas: []entradaZip{
+				entradaDeflate("[CONTENT_TYPES].XML", conteudoContentTypesMinimo),
+				entradaDeflate("WORD/DOCUMENT.XML", conteudoDocumentoMinimo),
+			},
 			temErro: true,
 		},
 	}
@@ -287,10 +302,11 @@ func TestConferirPacoteDocxComListaSuja(t *testing.T) {
 		t.Run(caso.nome, func(t *testing.T) {
 			t.Parallel()
 
-			err := ConferirPacoteDocx(caso.partes)
+			conteudo := montarZip(t, caso.entradas)
+			err := ConferirPacoteDocx(conteudo)
 			if caso.temErro {
 				if err == nil {
-					t.Fatalf("esperava erro para %v", caso.partes)
+					t.Fatalf("esperava erro para %v", caso.entradas)
 				}
 				var invalido *errors.ErroValidacao
 				if !errors.Como(err, &invalido) {
@@ -314,52 +330,56 @@ func TestMensagensDeErroNaoEcoamEntrada(t *testing.T) {
 
 	entradas := []struct {
 		nome string
-		agir func() error
+		agir func(t *testing.T) error
 	}{
 		{
 			nome: "ParaChaveStorage com valor perigoso",
-			agir: func() error {
+			agir: func(t *testing.T) error {
 				_, err := ParaChaveStorage("../" + marcador + "/../etc/passwd")
 				return err
 			},
 		},
 		{
 			nome: "ParaChaveStorage com prefixo alheio",
-			agir: func() error {
+			agir: func(t *testing.T) error {
 				_, err := ParaChaveStorage(marcador + "/" + idDaAuditoria + "/original.docx")
 				return err
 			},
 		},
 		{
 			nome: "FormatoPorMIME com mime desconhecido",
-			agir: func() error {
+			agir: func(t *testing.T) error {
 				_, err := FormatoPorMIME("application/" + marcador)
 				return err
 			},
 		},
 		{
 			nome: "DetectarFormato com conteúdo não suportado",
-			agir: func() error {
+			agir: func(t *testing.T) error {
 				_, err := DetectarFormato([]byte(marcador + marcador))
 				return err
 			},
 		},
 		{
 			nome: "DetectarFormato com prefixo insuficiente",
-			agir: func() error {
+			agir: func(t *testing.T) error {
 				_, err := DetectarFormato([]byte("ABC"))
 				return err
 			},
 		},
 		{
 			nome: "ConferirPacoteDocx com pacote alheio",
-			agir: func() error {
-				return ConferirPacoteDocx([]string{marcador + ".xml", "mimetype"})
+			agir: func(t *testing.T) error {
+				conteudo := montarZip(t, []entradaZip{
+					entradaDeflate(marcador+".xml", []byte(marcador)),
+					entradaDeflate("mimetype", []byte("application/vnd.oasis.opendocument.text")),
+				})
+				return ConferirPacoteDocx(conteudo)
 			},
 		},
 		{
 			nome: "NovaChaveOriginal com formato inválido",
-			agir: func() error {
+			agir: func(t *testing.T) error {
 				_, err := NovaChaveOriginal(uuid.MustParse(idDaAuditoria), FormatoArquivo(marcador))
 				return err
 			},
@@ -370,7 +390,7 @@ func TestMensagensDeErroNaoEcoamEntrada(t *testing.T) {
 		t.Run(entrada.nome, func(t *testing.T) {
 			t.Parallel()
 
-			err := entrada.agir()
+			err := entrada.agir(t)
 			if err == nil {
 				t.Fatalf("esperava erro para montar a mensagem")
 			}

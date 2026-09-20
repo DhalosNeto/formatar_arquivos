@@ -14,12 +14,16 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 
+	"github.com/daniel-halos/formatador/internal/application/web/webservices"
 	"github.com/daniel-halos/formatador/internal/data/postgres"
+	documentoservice "github.com/daniel-halos/formatador/internal/domain/documento/service"
 	"github.com/daniel-halos/formatador/internal/infra/config"
 	"github.com/daniel-halos/formatador/internal/infra/log"
+	"github.com/daniel-halos/formatador/internal/infra/pdfconv"
 	"github.com/daniel-halos/formatador/internal/infra/storage"
 	"github.com/daniel-halos/formatador/internal/infra/telemetry"
 	"github.com/daniel-halos/formatador/internal/rotas/root"
+	"github.com/daniel-halos/formatador/internal/rotas/root/webrotas/documentos"
 	"github.com/daniel-halos/formatador/internal/rotas/root/webrotas/saude"
 	"github.com/daniel-halos/formatador/internal/servidor"
 )
@@ -71,13 +75,35 @@ func executar() error {
 		return err
 	}
 
+	conversor, err := pdfconv.NovoCliente(cfg.Conversor)
+	if err != nil {
+		return err
+	}
+
+	servicoDominio, err := documentoservice.NovoServico(
+		gerenciador.Documentos(), documentoservice.TamanhoMaximoPadraoBytes)
+	if err != nil {
+		return err
+	}
+
+	servicoDocumento, err := webservices.NovoServicoDocumento(servicoDominio, clienteStorage, conversor)
+	if err != nil {
+		return err
+	}
+
 	servidorHTTP := servidor.Novo(servidor.Opcoes{
 		Config:      cfg,
 		Metricas:    metricas,
 		Registrador: registradorMetricas,
 		OrigensCORS: origensCORS(),
 		Dependencias: root.Dependencias{
-			Saude: saude.NovoControlador(versao, gerenciador, storage.NovoVerificador(clienteStorage)),
+			Saude: saude.NovoControlador(versao, gerenciador,
+				storage.NovoVerificador(clienteStorage), pdfconv.NovoVerificador(conversor)),
+			Documentos: documentos.NovoControlador(servicoDocumento),
+			// Teto de transporte com folga sobre o teto de negócio: o
+			// multipart carrega boundary e cabeçalhos além do arquivo, então
+			// cortar no valor exato reprovaria upload legítimo no limite.
+			TamanhoMaximoUploadBytes: documentoservice.TamanhoMaximoPadraoBytes + (1 << 20),
 		},
 	})
 

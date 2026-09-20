@@ -210,5 +210,6 @@ func (r *respostaEspia) Erro(status int, codigo, descricao string, razoes []stri
 func (r *respostaEspia) DefinirCabecalho(string, string) {}
 func (r *respostaEspia) Status() int                     { return r.status }
 func (r *respostaEspia) Escritor() http.ResponseWriter   { return nil }
+func (r *respostaEspia) DefinirCookie(*http.Cookie)      {}
 
 var _ rotas.Resposta = (*respostaEspia)(nil)

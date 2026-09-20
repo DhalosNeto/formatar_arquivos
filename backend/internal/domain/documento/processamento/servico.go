@@ -38,6 +38,14 @@ func (s *ServicoInterno) obter(ctx context.Context, id uuid.UUID) (entity.Docume
 	return documento, nil
 }
 
+// ObterPorIDInterno lê o documento sem restrição de dono e sem mudar seu
+// status — porta exclusiva de workers que precisam dos metadados (chave de
+// storage, formato) para trabalhar sobre o arquivo, como o executor de
+// renderização de preview.
+func (s *ServicoInterno) ObterPorIDInterno(ctx context.Context, id uuid.UUID) (entity.Documento, error) {
+	return s.obter(ctx, id)
+}
+
 func (s *ServicoInterno) IniciarAnalise(ctx context.Context, id uuid.UUID) (entity.Documento, error) {
 	return s.transitarStatus(ctx, id, (*entity.Documento).IniciarAnalise)
 }

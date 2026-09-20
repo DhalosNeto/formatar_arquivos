@@ -17,6 +17,7 @@ type (
 	ConsultaJobRepo      = jobrepo.ConsultaJobRepo
 	CriacaoJobRepo       = jobrepo.CriacaoJobRepo
 	ExecucaoJobRepo      = jobrepo.ExecucaoJobRepo
+	ReivindicacaoJobRepo = jobrepo.ReivindicacaoJobRepo
 )
 
 // GerenciadorDados agrupa os repositórios do sistema e o ciclo de vida da
@@ -29,5 +30,6 @@ type GerenciadorDados interface {
 	JobsConsulta() ConsultaJobRepo
 	JobsCriacao() CriacaoJobRepo
 	JobsExecucao() ExecucaoJobRepo
+	JobsReivindicacao() ReivindicacaoJobRepo
 	Fechar()
 }

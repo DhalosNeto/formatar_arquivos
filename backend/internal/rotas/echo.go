@@ -33,6 +33,25 @@ func adaptar(manipulador Manipulador) echo.HandlerFunc {
 	}
 }
 
+// LimitarCorpo devolve um middleware que corta a leitura do corpo da
+// requisição em n bytes: quem tentar ler além do teto recebe um erro de
+// leitura, em vez de um corpo truncado em silêncio ou de um upload sem limite.
+//
+// O corte só é possível no adaptador Echo, que expõe o *http.Request por trás
+// da Requisicao. Fora dele (por exemplo um fake de teste) não há corpo HTTP
+// real para mutar, e o middleware é no-op: chama o próximo sem alterar nada.
+func LimitarCorpo(n int64) Middleware {
+	return func(proximo Manipulador) Manipulador {
+		return func(ctx context.Context, requisicao Requisicao, resposta Resposta) error {
+			if requisicaoConcreta, ok := requisicao.(*requisicaoEcho); ok {
+				requisicaoHTTP := requisicaoConcreta.contexto.Request()
+				requisicaoHTTP.Body = http.MaxBytesReader(requisicaoConcreta.contexto.Response(), requisicaoHTTP.Body, n)
+			}
+			return proximo(ctx, requisicao, resposta)
+		}
+	}
+}
+
 type requisicaoEcho struct {
 	contexto echo.Context
 }
@@ -67,6 +86,18 @@ func (r *requisicaoEcho) IPCliente() string { return r.contexto.RealIP() }
 
 func (r *requisicaoEcho) Contexto() context.Context { return r.contexto.Request().Context() }
 
+// Cookie devolve o valor do cookie de nome informado, ou vazio quando ausente
+// ou malformado. O erro de Cookie é sempre http.ErrNoCookie neste contexto, e
+// tratar cookie ausente como valor vazio é o comportamento que os chamadores
+// (sessão) já esperam.
+func (r *requisicaoEcho) Cookie(nome string) string {
+	cookie, err := r.contexto.Cookie(nome)
+	if err != nil {
+		return ""
+	}
+	return cookie.Value
+}
+
 type respostaEcho struct {
 	contexto echo.Context
 }
@@ -90,3 +121,5 @@ func (r *respostaEcho) DefinirCabecalho(nome, valor string) {
 func (r *respostaEcho) Status() int { return r.contexto.Response().Status }
 
 func (r *respostaEcho) Escritor() http.ResponseWriter { return r.contexto.Response().Writer }
+
+func (r *respostaEcho) DefinirCookie(cookie *http.Cookie) { r.contexto.SetCookie(cookie) }

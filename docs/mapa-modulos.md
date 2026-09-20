@@ -74,7 +74,8 @@ Legenda de estado: ✅ verde com prova · 🔴 TDD vermelho proposital · ⬜ va
 **keywords:** MIME, magic bytes, docx, deteccao, ConferirPacoteDocx, A3
 
 - `backend/internal/domain/vo/formatoarquivo.go` — `FormatoArquivo`, `MIME`, `Extensao`, `FormatoPorMIME`, `DetectarFormato`, `ConferirPacoteDocx`, `TamanhoPrefixoDeteccao`
-- ⚠️ `ConferirPacoteDocx(partes []string)` **só confere nomes de partes** — não mede descompressão nem valida XML. Achado A3 segue aberto.
+- ✅ `ConferirPacoteDocx(conteudo []byte)` — A3 fechado: `MaximoEntradasPacote` (512), `TamanhoDescomprimidoMaximoBytes` (250 MiB), `RazaoDescompressaoMaxima` (200×) acima de `PisoRazaoDescompressaoBytes` (1 MiB)
+- ⚠️ **Não compare `UncompressedSize64` com `len(conteudo)`**: compressão faz o descomprimido ser maior que o pacote. Já foi falso positivo que reprovava DOCX legítimo.
 
 ## MOD: conversao-pdf ✅
 **keywords:** pdfconv, PDF, LibreOffice, unoserver, sidecar, conversor, docx para pdf
@@ -90,12 +91,16 @@ Legenda de estado: ✅ verde com prova · 🔴 TDD vermelho proposital · ⬜ va
 - ⚠️ watchdog precisa de `os._exit`, não `sys.exit`
 - ✅ resolvido: `ModuleNotFoundError: No module named 'uno'` vinha de pip e apt em interpretadores diferentes. `debian:trixie-slim` + `--break-system-packages` no `python3` do sistema
 
-## MOD: fila-worker ⬜ ← PRÓXIMO RECORTE
+## MOD: fila-worker ✅
 **keywords:** River, fila, queue, worker, enfileirar, render_preview, consumo
 
-- ⬜ `backend/internal/infra/fila/` vazia · `backend/cmd/worker/main.go` é stub
-- River **não** está no `go.mod`
-- ❓ decisão pendente: River migra sozinho **ou** dentro de uma migration goose `00004`? Afeta `make migrar` e os snapshots de 00002/00003.
+- **Sem River** — ver `docs/adr/0002-fila-sem-river.md`. A fila é a própria tabela `jobs`.
+- `backend/internal/infra/fila/laco.go` — `Laco`, `NovoLaco`, `Reivindicador`, `Executor`, `Finalizador`
+- `backend/internal/infra/fila/executor.go` — `ExecutorDocumento`, `NovoExecutorDocumento`
+- `internal/domain/job/repository/reivindicacao.go` — `ReivindicacaoJobRepo`, porta separada de propósito: reivindicar é o caso de uso de quem PROCURA trabalho; executar é de quem JÁ TEM um job
+- `postgres.RepositorioJob.Reivindicar` — `FOR UPDATE SKIP LOCKED`, provado por `TestReivindicarConcorrenteNaoEntregaJobDuasVezes`
+- ⚠️ desligamento usa `context.WithoutCancel`: cancelar o laço **não** pode abortar job em voo, senão a linha fica presa em `executando`
+- ⬜ **a fila está ociosa**: nada enfileira jobs, o upload converte síncrono. Ligar exige porta nova para o worker gravar `chave_storage_pdf` (não existe hoje — decisão de arquitetura)
 
 ## MOD: http-rotas ✅
 **keywords:** rota, handler, echo, middleware, requisicao, resposta, erro HTTP, prontidao
@@ -107,7 +112,13 @@ Legenda de estado: ✅ verde com prova · 🔴 TDD vermelho proposital · ⬜ va
 - `root/webrotas/saude/` — único conjunto registrado hoje
 - ⚠️ **Toda rota fica sob `/v1`** (`root.PrefixoAPI`). `/prontidao` dá 404; use `/v1/prontidao` e `/v1/saude`.
 - ✅ achado MÉDIO FECHADO: `saude/controlador.go:94` devolve `motivoIndisponivel` (mensagem fixa); causa real só no `slog`.
-- ⬜ vazios: `webrotas/documentos`, `webrotas/jobs`, `webrotas/auth`, `internal/application/web`
+- ✅ `webrotas/documentos`: `Controlador`, `Roteador`, `CaminhoColecao`/`CaminhoItem`/`CaminhoPreview`, `CampoArquivo`, `NomeCookieSessao`, `garantirSessao`, `sessaoExistente`
+- ✅ `application/web`: `webmodel.DocumentoResposta`/`PreviewResposta`, `webservices.ServicoDocumento` (portas `ArmazenadorObjetos`/`ConversorPDF`)
+- ✅ `rotas.LimitarCorpo`, `Requisicao.Cookie`, `Resposta.DefinirCookie`
+- ⚠️ **`BodyLimit` global roda ANTES do middleware de rota.** `servidor.go` isenta o upload via `Skipper` (`ehUploadDeDocumento`); sem isso o teto real da API vira 1 MB e o `LimitarCorpo` nunca é alcançado. Já foi bug.
+- ✅ `GET /v1/documentos` (`TratarListagem`): sem cookie devolve `[]` com **200**, não 404 — quem nunca enviou nada não tem sessão, e isso é normal. Não usa `sessaoExistente`.
+- ⚠️ `CaminhoColecao` hospeda POST **e** GET; só o POST leva `LimitarCorpo`
+- ⬜ vazios: `webrotas/jobs`, `webrotas/auth`
 
 ## MOD: erros ✅
 **keywords:** erro, Envolver, ErroValidacao, ErroAplicacao, classificacao, status HTTP

@@ -153,6 +153,7 @@ func (r *requisicaoFalsa) ArquivoFormulario(string) (*multipart.FileHeader, erro
 }
 func (r *requisicaoFalsa) IPCliente() string         { return "127.0.0.1" }
 func (r *requisicaoFalsa) Contexto() context.Context { return context.Background() }
+func (r *requisicaoFalsa) Cookie(string) string      { return "" }
 
 // respostaFalsa implementa rotas.Resposta para os testes de middleware.
 type respostaFalsa struct {
@@ -186,3 +187,4 @@ func (r *respostaFalsa) DefinirCabecalho(nome, valor string) {
 }
 func (r *respostaFalsa) Status() int                   { return r.status }
 func (r *respostaFalsa) Escritor() http.ResponseWriter { return nil }
+func (r *respostaFalsa) DefinirCookie(*http.Cookie)    {}

@@ -16,13 +16,19 @@ import (
 	"github.com/daniel-halos/formatador/internal/rotas"
 	"github.com/daniel-halos/formatador/internal/rotas/middleware"
 	"github.com/daniel-halos/formatador/internal/rotas/root"
+	"github.com/daniel-halos/formatador/internal/rotas/root/webrotas/documentos"
 )
 
 // CaminhoMetricas é onde o Prometheus raspa as métricas da aplicação.
 const CaminhoMetricas = "/metrics"
 
 // tamanhoMaximoCorpo limita o corpo de requisições que não são upload.
-// O limite específico de upload é aplicado na rota de documentos (F1).
+// O limite específico de upload é aplicado na rota de documentos, por
+// rotas.LimitarCorpo.
+//
+// Este middleware é global e roda ANTES dos middlewares de rota, então sem o
+// Skipper abaixo ele decidiria sozinho o teto de upload e o limite da rota
+// nunca seria alcançado — era o que fazia um DOCX de 1 MB voltar 413.
 const tamanhoMaximoCorpo = "1M"
 
 // Opcoes reúne tudo que o servidor precisa para ser montado.
@@ -64,8 +70,19 @@ func Novo(opcoes Opcoes) *http.Server {
 	}
 }
 
+// ehUploadDeDocumento isenta a rota de upload do teto global de corpo. O teto
+// real dela vem de rotas.LimitarCorpo, montado em documentos.Roteador com o
+// valor de negócio — não com "1M".
+func ehUploadDeDocumento(contexto echo.Context) bool {
+	return contexto.Request().Method == http.MethodPost &&
+		contexto.Path() == root.PrefixoAPI+documentos.CaminhoColecao
+}
+
 func aplicarMiddlewaresGlobais(servidorEcho *echo.Echo, opcoes Opcoes) {
-	servidorEcho.Use(echomiddleware.BodyLimit(tamanhoMaximoCorpo))
+	servidorEcho.Use(echomiddleware.BodyLimitWithConfig(echomiddleware.BodyLimitConfig{
+		Limit:   tamanhoMaximoCorpo,
+		Skipper: ehUploadDeDocumento,
+	}))
 	servidorEcho.Use(echomiddleware.SecureWithConfig(echomiddleware.SecureConfig{
 		XFrameOptions:      "DENY",
 		ContentTypeNosniff: "nosniff",

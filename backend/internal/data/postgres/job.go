@@ -192,6 +192,31 @@ func (r *RepositorioJob) Salvar(ctx context.Context, job entity.Job, statusAtual
 	return nil
 }
 
+// Reivindicar seleciona o job pendente mais antigo com FOR UPDATE SKIP
+// LOCKED, marca status=executando, incrementa tentativas e grava
+// iniciado_em, tudo em uma única instrução — dois workers concorrentes nunca
+// recebem o mesmo job (ver docs/adr/0002-fila-sem-river.md). Fila vazia
+// (pgx.ErrNoRows) não é erro: devolve (entity.Job{}, false, nil).
+func (r *RepositorioJob) Reivindicar(ctx context.Context) (entity.Job, bool, error) {
+	linha := r.pool.QueryRow(ctx,
+		`UPDATE jobs SET status='executando', tentativas=tentativas+1, iniciado_em=now()
+		 WHERE id = (
+		     SELECT id FROM jobs WHERE status='pendente'
+		     ORDER BY criado_em
+		     FOR UPDATE SKIP LOCKED
+		     LIMIT 1
+		 )
+		 RETURNING `+colunasJob)
+	job, err := scanJob(linha)
+	if err != nil {
+		if errors.E(err, pgx.ErrNoRows) {
+			return entity.Job{}, false, nil
+		}
+		return entity.Job{}, false, envolverPostgres(err, "reivindicar job")
+	}
+	return job, true, nil
+}
+
 // colunasJobComPrefixo repete colunasJob com o prefixo de alias de tabela,
 // necessário nas consultas com JOIN para desambiguar colunas homônimas.
 func colunasJobComPrefixo(prefixo string) string {

@@ -23,6 +23,8 @@ type Requisicao interface {
 	ArquivoFormulario(nome string) (*multipart.FileHeader, error)
 	IPCliente() string
 	Contexto() context.Context
+	// Cookie devolve o valor do cookie de nome informado, ou vazio quando ausente.
+	Cookie(nome string) string
 }
 
 // Resposta expõe o que um manipulador pode escrever na resposta HTTP.
@@ -35,6 +37,8 @@ type Resposta interface {
 	DefinirCabecalho(nome, valor string)
 	Status() int
 	Escritor() http.ResponseWriter
+	// DefinirCookie grava um cookie na resposta.
+	DefinirCookie(cookie *http.Cookie)
 }
 
 // Manipulador é a assinatura de todo handler do projeto.

@@ -82,6 +82,10 @@ func (g *Gerenciador) JobsCriacao() contracts.CriacaoJobRepo { return NovoReposi
 // dono, usado pelo worker de processamento.
 func (g *Gerenciador) JobsExecucao() contracts.ExecucaoJobRepo { return NovoRepositorioJob(g.pool) }
 
+func (g *Gerenciador) JobsReivindicacao() contracts.ReivindicacaoJobRepo {
+	return NovoRepositorioJob(g.pool)
+}
+
 // Fechar encerra o pool de conexões.
 func (g *Gerenciador) Fechar() { g.pool.Close() }
 

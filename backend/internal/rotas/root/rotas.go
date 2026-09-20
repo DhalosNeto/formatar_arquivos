@@ -4,6 +4,7 @@ package root
 
 import (
 	"github.com/daniel-halos/formatador/internal/rotas"
+	"github.com/daniel-halos/formatador/internal/rotas/root/webrotas/documentos"
 	"github.com/daniel-halos/formatador/internal/rotas/root/webrotas/saude"
 )
 
@@ -12,7 +13,9 @@ const PrefixoAPI = "/v1"
 
 // Dependencias reúne o que o roteador raiz precisa para ser montado.
 type Dependencias struct {
-	Saude *saude.Controlador
+	Saude                    *saude.Controlador
+	Documentos               *documentos.Controlador
+	TamanhoMaximoUploadBytes int64
 }
 
 // Roteador monta o roteador raiz da aplicação.
@@ -21,5 +24,6 @@ type Dependencias struct {
 func Roteador(dependencias Dependencias) rotas.Roteador {
 	raiz := rotas.NovoRoteador()
 	raiz.Registrar(saude.Roteador(dependencias.Saude), "")
+	raiz.Registrar(documentos.Roteador(dependencias.Documentos, dependencias.TamanhoMaximoUploadBytes), "")
 	return raiz
 }

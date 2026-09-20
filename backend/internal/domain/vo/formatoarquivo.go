@@ -3,6 +3,7 @@
 package vo
 
 import (
+	"archive/zip"
 	"bytes"
 
 	"github.com/daniel-halos/formatador/internal/infra/errors"
@@ -44,6 +45,24 @@ const (
 	mensagemPrefixoInsuficiente = "conteúdo insuficiente para identificar o formato"
 	mensagemPacoteDocxInvalido  = "o arquivo não é um pacote DOCX válido"
 	mensagemMIMENaoSuportado    = "tipo de conteúdo não suportado"
+	mensagemPacoteDocxAbusivo   = "o pacote excede os limites de descompressão permitidos"
+)
+
+// Limites contra zip bomb na conferência de pacotes DOCX. Os valores vêm da
+// central directory do ZIP, nunca de descompressão real.
+const (
+	// RazaoDescompressaoMaxima é o maior fator (descomprimido / comprimido)
+	// tolerado por entrada, acima do PisoRazaoDescompressaoBytes.
+	RazaoDescompressaoMaxima = 200
+	// PisoRazaoDescompressaoBytes isenta entradas pequenas da checagem de
+	// razão: arquivos legítimos e pequenos (ex.: XML repetitivo) podem
+	// comprimir muito bem sem serem uma bomba.
+	PisoRazaoDescompressaoBytes uint64 = 1 << 20
+	// MaximoEntradasPacote é o teto de arquivos dentro do ZIP.
+	MaximoEntradasPacote = 512
+	// TamanhoDescomprimidoMaximoBytes é o teto da soma de todos os tamanhos
+	// descomprimidos declarados no pacote.
+	TamanhoDescomprimidoMaximoBytes uint64 = 250 << 20
 )
 
 // Assinaturas binárias reconhecidas no início do arquivo.
@@ -122,11 +141,58 @@ func DetectarFormato(prefixo []byte) (FormatoArquivo, error) {
 	}
 }
 
-// ConferirPacoteDocx valida que a lista de partes do ZIP corresponde a um DOCX.
-func ConferirPacoteDocx(partes []string) error {
+// ConferirPacoteDocx abre o ZIP e valida que ele corresponde a um DOCX,
+// recusando pacotes construídos para esgotar memória por descompressão (zip
+// bomb). Os tamanhos usados vêm da central directory do ZIP — ou seja, são
+// DECLARADOS pelo cabeçalho, sem nenhuma entrada ser de fato descomprimida.
+func ConferirPacoteDocx(conteudo []byte) error {
+	leitor, err := zip.NewReader(bytes.NewReader(conteudo), int64(len(conteudo)))
+	if err != nil {
+		return errors.NovoErroValidacao("arquivo", mensagemPacoteDocxInvalido)
+	}
+
+	if len(leitor.File) == 0 {
+		return errors.NovoErroValidacao("arquivo", mensagemPacoteDocxInvalido)
+	}
+	if len(leitor.File) > MaximoEntradasPacote {
+		return errors.NovoErroValidacao("arquivo", mensagemPacoteDocxAbusivo)
+	}
+
+	var total uint64
 	var temContentTypes, temDocumentoPrincipal bool
-	for _, parte := range partes {
-		switch parte {
+
+	// ponytail: os tamanhos são DECLARADOS pela central directory e um ZIP
+	// hostil pode mentir; este teto é a barreira barata de primeira linha.
+	// Quem descomprimir de verdade (F2) precisa envolver cada f.Open() num
+	// io.LimitReader.
+	for _, f := range leitor.File {
+		// Teto POR ENTRADA antes de somar. Serve a duas coisas: barra de uma vez
+		// o ZIP64 que declara um tamanho absurdo, e mantém a soma abaixo de
+		// MaximoEntradasPacote * TamanhoDescomprimidoMaximoBytes, que cabe
+		// folgadamente em uint64 — então o acumulador não estoura.
+		//
+		// Não compare com len(conteudo): compressão existe exatamente para que
+		// o descomprimido seja MAIOR que o pacote. 512 KiB de zeros viram ~600
+		// bytes em deflate, e um teto assim reprovaria o caso legítimo.
+		if f.UncompressedSize64 > TamanhoDescomprimidoMaximoBytes {
+			return errors.NovoErroValidacao("arquivo", mensagemPacoteDocxAbusivo)
+		}
+
+		total += f.UncompressedSize64
+		if total > TamanhoDescomprimidoMaximoBytes {
+			return errors.NovoErroValidacao("arquivo", mensagemPacoteDocxAbusivo)
+		}
+
+		if f.CompressedSize64 == 0 && f.UncompressedSize64 > 0 {
+			return errors.NovoErroValidacao("arquivo", mensagemPacoteDocxAbusivo)
+		}
+
+		if f.UncompressedSize64 > PisoRazaoDescompressaoBytes &&
+			f.UncompressedSize64/f.CompressedSize64 > RazaoDescompressaoMaxima {
+			return errors.NovoErroValidacao("arquivo", mensagemPacoteDocxAbusivo)
+		}
+
+		switch f.Name {
 		case ParteContentTypes:
 			temContentTypes = true
 		case ParteDocumentoPrincipal:

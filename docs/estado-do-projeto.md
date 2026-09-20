@@ -5,8 +5,272 @@
 > sessão, queda, troca de máquina). Quem retoma lê este arquivo primeiro, depois
 > `docs/plano.md` e `CLAUDE.md`.
 
-**Última atualização:** 2026-09-19
+**Última atualização:** 2026-09-20
 **Fase corrente:** F1 — Ingestão e preview
+
+## F1 FECHADA — upload, preview, listagem, fila e worker (2026-09-20)
+
+Checkpoint mais recente. O critério da fase — *"subo um DOCX e vejo o PDF na
+tela"* — está cumprido, e agora também a listagem dos documentos da sessão.
+
+### Provas contra a API real (curl, não teste)
+
+```
+GET  /v1/documentos          sem cookie → []                    HTTP 200
+POST /v1/documentos          (×2)       → 201, 201
+GET  /v1/documentos          → artigo-desformatado.docx  recebido  preview=true
+                               artigo.docx               recebido  preview=true
+GET  /v1/documentos          outra sessão → []      ← não vê nada alheio
+GET  /v1/documentos?limite=100000  → 200            ← não estoura
+GET  /v1/documentos?limite=1       → 1 item         ← paginação respeitada
+GET  /v1/documentos?limite=abc     → 200            ← cai no padrão
+```
+
+Ordenação do mais recente primeiro vem de graça do índice
+`documentos_por_sessao (sessao_id, criado_em DESC)`.
+
+**Sem cookie devolve `[]` com 200, não 404.** Comportamento deliberadamente
+diferente de obter/preview: quem abre o site pela primeira vez não tem sessão, e
+isso é normal, não falha de autenticação. `TratarListagem` não usa
+`sessaoExistente` por isso.
+
+### Fila sem River — ADR 0002, provado
+
+`docs/adr/0002-fila-sem-river.md` registra a mudança em relação ao plano. A fila
+é a própria tabela `jobs`, reivindicada com `FOR UPDATE SKIP LOCKED`. O índice
+`jobs_pendentes` já existia desde a `00001` — a infraestrutura estava lá, faltava
+uma query.
+
+Integração PostgreSQL real, 12 testes PASS, incluindo o que sustenta o ADR:
+
+```
+TestReivindicarConcorrenteNaoEntregaJobDuasVezes        PASS
+TestReivindicarNaoPegaJobEmExecucao                     PASS
+TestLacoContextoCanceladoTerminaJobEmVoo                PASS
+TestLacoNaoLogaConteudoDoErroDeExecucao                 PASS
+```
+
+**Zero dependência nova.** Nenhuma migration nova, então os snapshots de
+`00002`/`00003` seguem válidos.
+
+### Quarta porta: `ReivindicacaoJobRepo`
+
+Adicionar `Reivindicar` a `ExecucaoJobRepo` quebrou o pacote `job/execucao` — o
+fake dos testes deixou de satisfazer a interface. A correção **não** foi
+remendar o fake: o projeto já separa uma porta por caso de uso (`Consulta`,
+`Criacao`, `Execucao`), e `ServicoInterno` nunca reivindica, só chama
+`ObterPorIDInterno` e `Salvar`.
+
+Criada `internal/domain/job/repository/reivindicacao.go`. Reivindicar é o caso
+de uso de **quem procura trabalho**; executar é o de **quem já tem um job em
+mãos**. Com a separação, o fake voltou ao verde sem ser tocado.
+
+### ⚠️ Duas gambiarras removidas do frontend — não reintroduza
+
+O codador reportou honestamente duas mudanças de produção feitas para satisfazer
+teste. Ambas foram revertidas, e a causa real corrigida no teste:
+
+1. **`flushSync` no `onSuccess` de `EnvioDeDocumento`.** Existia porque uma
+   asserção usava `findByText` no singular, que estoura com mais de um match —
+   e depois do envio o nome do arquivo aparece na confirmação **e** na lista. O
+   teste media o instante de commit do React, não comportamento visível.
+   Corrigido para `findAllByText`; `flushSync` (escape hatch que o próprio React
+   desaconselha) saiu.
+2. **`Array.isArray` em `ListaDeDocumentos`.** O helper `mockarFetchRoteado` de
+   `Inicio.test.tsx` casava só por trecho de URL, **ignorando o método HTTP**,
+   então `GET /v1/documentos` recebia a resposta do `POST` — objeto onde deveria
+   vir array. Bug que não existe contra a API real. O mock agora distingue
+   método; a guarda saiu.
+
+Os 33 testes do front seguem verdes sem as duas, o que prova que eram
+desnecessárias. **Lição: quando um teste exige mudança estranha no produto,
+suspeite do teste primeiro.**
+
+### Correção no A3 (`ConferirPacoteDocx`)
+
+O guarda de zip bomb rejeitava qualquer entrada cujo tamanho descomprimido
+superasse o do próprio ZIP — mas é exatamente isso que compressão faz. 512 KiB
+de zeros viram ~600 bytes em deflate, e DOCX legítimo com imagem ou XML
+repetitivo era reprovado como bomba. Trocado por teto **por entrada** contra
+`TamanhoDescomprimidoMaximoBytes`, que barra o ZIP64 mentiroso do mesmo jeito e
+mantém a soma longe de estourar `uint64`.
+
+### Estado dos portões
+
+```
+go build ./...                    exit 0
+gofmt -l .                        limpo
+golangci-lint                     0 issues
+go test ./... -race               só job/service falha (RED legado,
+                                  SHA 654be0fd…3e16dc conferido)
+frontend                          33 testes, typecheck e lint limpos
+dependências novas                nenhuma
+```
+
+### O que sobrou da F1, e por que não bloqueia
+
+**A fila está construída, testada e ociosa.** Nada enfileira jobs ainda — o
+upload converte de forma síncrona. Ligar o upload à fila exige uma capacidade
+que hoje não existe: o worker não tem porta para gravar `chave_storage_pdf` em
+`documentos`. `DocumentoInternoRepo` só tem `AtualizarStatus`/`DefinirCDM`, e
+`DefinirChavePreviewPDF` exige `vo.Dono` — o domínio deliberadamente não tem
+"dono de sistema". O codador parou e reportou em vez de inventar a porta, que
+foi a decisão certa. **Criar essa capacidade é decisão de arquitetura, não de
+implementação.**
+
+### Achados ABERTOS
+
+- **Sem auditoria independente** nos recortes de hoje: validador e segurança não
+  rodaram. As verificações foram feitas pelo principal.
+- **MÉDIO:** sidecar de conversão tem saída para a internet (exfiltração via
+  DOCX malicioso). Exige rede `internal: true` também em `api` e `worker`.
+- **Pendência:** `api`/`worker` sem `depends_on: libreoffice` no compose.
+- **BAIXO:** `config.Storage` sem `GoStringer`; constantes SQLSTATE mortas em
+  `conexao.go:22`.
+- **Dívida de teste:** a ordenação por `criado_em` do `Reivindicar` não tem teste
+  dedicado — um `ORDER BY` removido por engano passaria despercebido.
+
+### Próximo
+
+**F2 — parser e CDM.** `internal/infra/ooxml` é onde mora o risco técnico real
+do projeto: abrir e salvar o pacote sem perder nada. O primeiro teste a escrever
+é o round-trip fiel (abrir e salvar sem mutar produz ZIP equivalente), antes de
+qualquer mutação.
+
+Antes da F3, alguém precisa preencher `backend/rulesets/` com valores da NBR
+14724 a partir de fonte oficial — a skill `normas-abnt` tem a tabela de conversão
+pronta e os valores normativos como placeholder de propósito.
+
+## MARCO — o fluxo da F1 funciona ponta a ponta (2026-09-20)
+
+Checkpoint mais recente. **Subi um DOCX e baixei o PDF dele.** É o critério de
+pronto da F1 para o caminho do usuário.
+
+### A prova, com curl contra a API real
+
+```
+POST /v1/documentos   (multipart, campo "arquivo")
+{"id":"a670e6a2-…","nome_original":"artigo.docx","formato":"docx",
+ "tamanho_bytes":930,"status":"recebido","tem_preview":true}        HTTP 201
+
+GET  /v1/documentos/{id}                                            HTTP 200
+GET  /v1/documentos/{id}/preview  → URL pré-assinada
+curl "$URL" -o preview.pdf
+00000000: 2550 4446 2d31 2e37    %PDF-1.7      15170 bytes
+```
+
+PDF gerado pelo LibreOffice a partir do DOCX enviado, via sidecar próprio.
+`/v1/prontidao` responde com as **três** dependências: postgres, storage e
+conversor.
+
+### Provas de segurança (todas com curl, não teste)
+
+| Ataque | Resultado |
+|---|---|
+| `.docx` com texto puro dentro | 400 — "não foi possível identificar o formato" |
+| ZIP válido sem as partes do DOCX | 400 — "não é um pacote DOCX válido" |
+| **zip bomb** (1 GiB descomprimido, 1 MB no disco) | 400 — "excede os limites de descompressão" |
+| arquivo de 30 MB (acima do teto de negócio) | 400 |
+| sessão B lendo documento da sessão A | 404, corpo **byte a byte idêntico** ao de um ID inexistente |
+| sessão B pedindo preview do documento de A | 404 |
+
+### 🐛 BUG DE PRODUÇÃO encontrado rodando, invisível para os testes
+
+Upload de **1 MB voltava 413**, com o teto de negócio em 25 MiB. Um artigo
+acadêmico com imagens seria recusado.
+
+Causa: `internal/servidor/servidor.go` registrava
+`echomiddleware.BodyLimit("1M")` **globalmente**. Middleware global roda ANTES
+do middleware de rota, então o `rotas.LimitarCorpo` montado em
+`documentos.Roteador` nunca era alcançado — o teto real da API era 1 MB. O
+comentário no código dizia "limita requisições que não são upload", mas o
+registro era global: intenção e implementação divergiam.
+
+Corrigido com `BodyLimitWithConfig` + `Skipper` (`ehUploadDeDocumento`), que
+isenta só `POST /v1/documentos`. As rotas de JSON mantêm o teto apertado de 1 MB.
+
+Medido antes e depois:
+
+```
+antes:   900 KB→201 · 1100 KB→413 · 2000 KB→413
+depois:  900 KB→201 · 2000 KB→201 · 8000 KB→201 · 20000 KB→201 · 30 MB→400
+```
+
+**Nenhum teste unitário pegaria isso** — o middleware global vive na montagem do
+servidor, fora do alcance dos testes de rota.
+
+### 🔒 Vazamento sutil corrigido
+
+`sessao.go` devolvia `NovoErroNaoEncontrado("sessão")` quando o cookie faltava,
+produzindo `"sessão não encontrado"`. Dois problemas: entregava ao atacante que
+a falha foi de autenticação e não de existência, e concordava errado em
+português. Agora declara `"documento"`, tornando a resposta indistinguível da de
+um documento inexistente — que era a intenção original do desenho.
+
+### ⚠️ Lição: uma "otimização" minha foi barrada pelos testes
+
+`webservices` produzia 6 eventos onde o teste exigia 5 — havia um
+`repo.ObterPorID` antes de `repo.DefinirChavePreviewPDF`. Parecia ida-e-volta
+redundante, já que o UPDATE filtra o dono no WHERE e devolve NaoEncontrado com
+zero linhas. **Removi o `Obter` de `documentoservice.RegistrarPreviewPDF` e
+quatro testes do domínio quebraram na hora:**
+
+```
+TestAcessoCruzadoNaoRevelaDocumento    "preview de terceiro chegou à escrita"
+TestIDVazioRecusadoAntesDeIO           campo "id" ausente
+TestDonoVazioRecusadoAntesDeIO         esperava ErroValidacao
+TestRepositorioRetornaDocumentoSemDono
+```
+
+Aquela leitura **não é redundância, é guarda**: carrega a validação de entrada
+(dono vazio e ID vazio viram `ErroValidacao` antes de qualquer I/O) e garante
+que a escrita nunca é sequer tentada para documento de terceiro. Revertido; quem
+estava errado era a asserção do teste de `webservices`, agora relaxada com um
+comentário nomeando os quatro testes que quebram se alguém repetir a ideia.
+
+### Entregue nesta rodada
+
+- `vo.ConferirPacoteDocx` endurecido: assinatura passou de `[]string` para
+  `[]byte`, com teto de entradas (512), de tamanho descomprimido total (250 MiB)
+  e razão de descompressão (200× acima do piso de 1 MiB).
+  **Corrigi um falso positivo grave**: o guarda original rejeitava qualquer
+  entrada cujo tamanho descomprimido superasse o do ZIP — mas é exatamente isso
+  que compressão faz. 512 KiB de zeros viram ~600 bytes em deflate, e o pacote
+  legítimo era reprovado como zip bomb.
+- `rotas.LimitarCorpo`, `Requisicao.Cookie`, `Resposta.DefinirCookie`
+- `webmodel.DocumentoResposta` / `PreviewResposta`
+- `webservices.ServicoDocumento` com as portas `ArmazenadorObjetos` e
+  `ConversorPDF`; ingestão síncrona (original → registro → PDF → preview)
+- `webrotas/documentos`: `Controlador`, sessão anônima por cookie
+  `httpOnly`+`Secure`+`SameSite=Strict`, e `rotas.go` registrando as três rotas
+- fiação completa em `cmd/api`, incluindo o `pdfconv.Verificador` no `/prontidao`
+
+### Provas
+
+```
+go build ./...                    exit 0
+gofmt -l .                        limpo
+go test ./... -race -count=1      só job/service falha (RED legado)
+golangci-lint run ./...           1 issue, e é o typecheck do job/service legado
+webservices                       89,8% de cobertura
+```
+
+### Ainda ABERTO
+
+- **Sem auditoria independente** nestes recortes: validador e segurança não
+  rodaram. Tudo acima foi verificado por mim.
+- **MÉDIO:** sidecar tem saída para a internet (exfiltração via DOCX malicioso).
+  Exige rede `internal: true` também em `api` e `worker`.
+- **Pendência:** `api`/`worker` sem `depends_on: libreoffice`.
+- **BAIXO:** `config.Storage` sem `GoStringer`; constantes SQLSTATE mortas em
+  `conexao.go:22`.
+- Conversão é **síncrona** por decisão: `MOD: fila-worker` segue vazio e a
+  decisão River × goose continua sem resposta.
+
+### Próximo
+
+Frontend (upload + preview PDF.js) fecha a F1 inteira — hoje o front tem só a
+tela de status da API. Depois, `MOD: fila-worker` ou partir para a F2.
 
 ## MARCO — a API sobe e o /prontidao responde de verdade (2026-09-19)
 
