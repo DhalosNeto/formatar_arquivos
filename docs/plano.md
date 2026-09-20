@@ -1,5 +1,17 @@
 # Plano — Formatador Acadêmico (monorepo Go + React)
 
+> ⚠️ **DOCUMENTO HISTÓRICO — 2026-09-12.** Continua valendo para a visão geral
+> do produto, a arquitetura e as decisões de stack. **Não use as fases daqui
+> como plano de trabalho.**
+>
+> - Plano vigente do backend: **`plano-backend.md`**
+> - Estado atual e o que já foi feito: **`estado-do-backend.md`**
+> - Contrato que o frontend consome: **`contrato-api.md`**
+>
+> O que mudou desde este documento: F0 e F1 estão fechadas; o frontend passou a
+> ser responsabilidade de outra pessoa; e a fila abandonou o River em favor da
+> própria tabela `jobs` (ver `adr/0002-fila-sem-river.md`).
+
 ## Context
 
 Hoje um pesquisador que quer submeter um artigo para uma revista precisa reformatar o trabalho à mão para as diretrizes daquele periódico: margens, espaçamento, fontes, hierarquia de títulos, ordem das seções, legendas de tabelas/figuras e, o pior de tudo, o estilo de citações e da lista de referências. É um trabalho manual, repetitivo, propenso a erro, e precisa ser refeito a cada rejeição/resubmissão em outra revista.

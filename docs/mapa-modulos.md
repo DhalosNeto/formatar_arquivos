@@ -185,5 +185,9 @@ Legenda de estado: ✅ verde com prova · 🔴 TDD vermelho proposital · ⬜ va
 - `docs/retomada-f1.md` — **checkpoint do topo é o estado atual**; abaixo é histórico
 - `docs/estado-do-projeto.md` — mesmo conteúdo, visão por entrega
 - `docs/auditoria-specs-f1.md` — auditoria das specs herdadas (regra 13 já satisfeita)
-- `docs/plano.md` — plano geral F0→F7 · `docs/adr/0001-docx-in-place.md` — decisão do motor
+- `docs/plano-backend.md` — **plano vigente do backend (F2→F7)**
+- `docs/estado-do-backend.md` — resumo das fases e do que já existe
+- `docs/contrato-api.md` — contrato da API, para quem faz o frontend
+- `docs/plano.md` — histórico: visão de produto e stack (fases desatualizadas)
+- `docs/adr/0001-docx-in-place.md` · `docs/adr/0002-fila-sem-river.md`
 - Contratos fechados: `docs/{ciclo-b,job-entity,job-criacao,job-consulta,migration-dono,migration-job-idempotencia}-contrato.md`
