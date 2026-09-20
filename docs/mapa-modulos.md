@@ -182,9 +182,7 @@ Legenda de estado: ✅ verde com prova · 🔴 TDD vermelho proposital · ⬜ va
 
 ## Onde está o estado e o histórico
 
-- `docs/retomada-f1.md` — **checkpoint do topo é o estado atual**; abaixo é histórico
-- `docs/estado-do-projeto.md` — mesmo conteúdo, visão por entrega
-- `docs/auditoria-specs-f1.md` — auditoria das specs herdadas (regra 13 já satisfeita)
+- `docs/estado-do-backend.md` — **estado atual**: quadro das fases e o que já existe
 - `docs/plano-backend.md` — **plano vigente do backend (F2→F7)**
 - `docs/estado-do-backend.md` — resumo das fases e do que já existe
 - `docs/contrato-api.md` — contrato da API, para quem faz o frontend

@@ -1,3 +1,8 @@
+<!-- GERADO A PARTIR DE CLAUDE.md — não edite à mão.
+     A única diferença intencional entre os dois é o diretório dos agentes
+     (.claude/agents vs .codex/agents). Mudou uma regra? Mude no CLAUDE.md e
+     regenere, senão as duas ferramentas passam a seguir regras diferentes. -->
+
 # Formatador Acadêmico
 
 Sistema web que recebe um artigo, aplica as diretrizes de uma revista ou norma
@@ -22,6 +27,11 @@ cd frontend && npm run dev
 ```
 
 ## Arquitetura
+
+> **Procurando onde algo mora?** `docs/mapa-modulos.md` é um índice greppável por
+> módulo: `grep -i "<assunto>" docs/mapa-modulos.md` devolve o arquivo e os
+> símbolos. Use antes de varrer o repositório.
+
 
 Hexagonal. **A dependência aponta sempre para dentro.**
 
@@ -70,6 +80,16 @@ uma cópia do documento e não contém estilo.
 9. **Token de sessão nunca em `localStorage`** — cookie `httpOnly` + `Secure` +
    `SameSite=Strict`.
 10. Antes de terminar qualquer entrega: `go build ./... && go vet ./... && gofmt -l .`
+11. **VO que carregue identificador sensível precisa de `String()` E `GoString()`.**
+    `%#v` não passa pelo `Stringer`: sem `GoStringer` o `fmt` imprime os campos
+    privados. Campo privado **não** protege log. Quando o identificador é um
+    `sessao_id` de cookie, o que vaza é credencial viva, não só privacidade.
+12. **Em decisão composta, exija caso por termo, não por linha.** Cobertura de
+    *statements* não é de *condições*: um OR cujo segundo termo nunca é
+    exercitado marca 100% e ninguém quebra teste ao remover metade da condição.
+13. **Especificação herdada é auditada antes de ser implementada.** Se os testes
+    vierem prontos de outra sessão, `validador` e `seguranca` os auditam **antes**
+    de o `codador` escrever qualquer linha contra eles.
 
 ## Testes (TDD)
 
@@ -83,7 +103,7 @@ Teste primeiro. Quatro camadas:
 - **Integração** (`//go:build integration`, testcontainers) e **E2E** (Playwright).
 
 Cobertura mínima: **80% em `internal/domain/`**. Nenhum teste chama a API do
-Codex de verdade — use um fake de `ClassificadorEstrutura`.
+Claude de verdade — use um fake de `ClassificadorEstrutura`.
 
 ## Rulesets das revistas
 
@@ -94,7 +114,7 @@ sempre reproduzível.
 
 ## Time de agentes
 
-`.Codex/agents/` tem seis agentes: `orquestrador`, `investigador`, `codador`,
+`.codex/agents/` tem seis agentes: `orquestrador`, `investigador`, `codador`,
 `testador`, `validador`, `seguranca`. O ciclo é
 investigar → (teste que falha) → codar → testar/validar/segurança em paralelo →
 retrabalho ou fechamento. Validador e segurança são somente leitura: reportam,
@@ -107,3 +127,10 @@ F4 citações e referências · F5 fallback de LLM · F6 tabelas/figuras e revis
 reais · F7 auth e formatos extras.
 
 Plano completo: `docs/plano.md`.
+
+# Compact instructions
+
+Ao compactar, preserve: decisões de arquitetura tomadas, contratos de
+função definidos pelo investigador, saída real de comando (go test,
+go build), e achados de validador/segurança ainda não corrigidos.
+Pode resumir: exploração de código já concluída e discussão descartada.

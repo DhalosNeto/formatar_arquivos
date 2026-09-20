@@ -83,6 +83,6 @@ Palavras-chave: `dono`/`IDOR`, `documento`, `job`, `postgres`/`pgx`,
 `fiacao`/`main`.
 
 Se um símbolo do mapa não existir no código, o mapa está errado — reporte.
-Estado atual: checkpoint do TOPO de `docs/retomada-f1.md` (o resto é histórico).
+Estado atual: `docs/estado-do-backend.md`. O que falta: `docs/plano-backend.md`.
 
 """

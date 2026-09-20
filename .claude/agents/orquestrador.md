@@ -84,7 +84,7 @@ não invente o código.
 
 Ao montar o prompt de um recorte, cite as palavras-chave do módulo em vez de
 mandar o agente explorar — economiza rodada inteira. Estado atual e pendências:
-checkpoint do topo de `docs/retomada-f1.md`.
+`docs/estado-do-backend.md` (estado) e `docs/plano-backend.md` (o que falta).
 
 **Não encerre o turno dizendo "aguardando o retorno do subagente"** — isso
 encerra você e o ciclo morre parado. Continue no mesmo turno até ter o resultado

@@ -69,6 +69,7 @@ Se um símbolo do mapa não existir no código, **o mapa está errado** — repo
 não invente o código.
 
 Antes de propor caminho novo, confira nestas ordens: (1) o módulo no mapa,
-(2) `docs/retomada-f1.md` — **só o checkpoint do topo**, o resto é histórico,
-(3) `docs/auditoria-specs-f1.md` se a spec for herdada (regra 13 já satisfeita lá).
+(2) `docs/estado-do-backend.md` — estado atual e pendências abertas,
+(3) `docs/plano-backend.md` — a fase em curso, seu critério de pronto e as
+armadilhas já mapeadas dela.
 Reuso vem antes de código novo: `grep -rn` o símbolo antes de desenhar outro.
