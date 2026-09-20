@@ -1,0 +1,162 @@
+name: formatador
+
+services:
+  api:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.backend
+      target: api
+    environment:
+      PORTA: "8080"
+      AMBIENTE: desenvolvimento
+      NIVEL_LOG: debug
+      POSTGRES_DSN: postgres://formatador:formatador@postgres:5432/formatador?sslmode=disable
+      STORAGE_ENDPOINT: http://minio:9000
+      STORAGE_BUCKET: documentos
+      STORAGE_ACCESS_KEY: minioadmin
+      STORAGE_SECRET_KEY: minioadmin
+      CONVERSOR_URL: http://libreoffice:2004
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
+      OTEL_SERVICE_NAME: formatador-api
+      CORS_ORIGENS: http://localhost:5173
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.backend
+      target: worker
+    environment:
+      AMBIENTE: desenvolvimento
+      NIVEL_LOG: debug
+      POSTGRES_DSN: postgres://formatador:formatador@postgres:5432/formatador?sslmode=disable
+      STORAGE_ENDPOINT: http://minio:9000
+      STORAGE_BUCKET: documentos
+      STORAGE_ACCESS_KEY: minioadmin
+      STORAGE_SECRET_KEY: minioadmin
+      CONVERSOR_URL: http://libreoffice:2004
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
+      OTEL_SERVICE_NAME: formatador-worker
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    restart: unless-stopped
+
+  web:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.frontend
+    environment:
+      VITE_API_URL: http://api:8080
+    ports:
+      - "5173:5173"
+    depends_on:
+      - api
+    restart: unless-stopped
+
+  postgres:
+    image: docker.io/library/postgres:16-alpine
+    environment:
+      POSTGRES_USER: formatador
+      POSTGRES_PASSWORD: formatador
+      POSTGRES_DB: formatador
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_dados:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U formatador -d formatador"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  minio:
+    image: quay.io/minio/minio:latest
+    command: server /dados --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_dados:/dados
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  criar-buckets:
+    image: quay.io/minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 minioadmin minioadmin &&
+      mc mb --ignore-existing local/documentos &&
+      mc anonymous set none local/documentos &&
+      echo 'bucket documentos pronto (sem acesso anônimo)'
+      "
+
+  # Conversão DOCX -> PDF. Sem acesso à rede externa: o documento do usuário
+  # nunca deve poder disparar requisição de saída a partir daqui.
+  # Sidecar próprio (não é imagem de terceiro): ver
+  # deploy/Dockerfile.libreoffice para o contrato HTTP e o porquê da troca.
+  # PENDENTE (registrado, não resolvido neste recorte):
+  #   1. isolar a rede deste serviço (network: internal: true) para o
+  #      LibreOffice não ter saída para a internet ao processar um DOCX
+  #      malicioso com OLE/imagem remota -- exige atribuir a mesma rede
+  #      também a api e worker, senão eles perdem acesso ao sidecar.
+  #   2. api/worker ainda não declaram depends_on: libreoffice, então o
+  #      primeiro job depois de um `make up` frio tende a falhar.
+  libreoffice:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.libreoffice
+    ports:
+      - "2004:2004"
+    restart: unless-stopped
+
+  jaeger:
+    image: docker.io/jaegertracing/all-in-one:latest
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports:
+      - "16686:16686"
+      - "4318:4318"
+
+  prometheus:
+    image: docker.io/prom/prometheus:latest
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./alertas:/etc/prometheus/alertas:ro
+    ports:
+      - "9090:9090"
+
+  grafana:
+    image: docker.io/grafana/grafana:latest
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana_dados:/var/lib/grafana
+    depends_on:
+      - prometheus
+
+volumes:
+  postgres_dados:
+  minio_dados:
+  grafana_dados:

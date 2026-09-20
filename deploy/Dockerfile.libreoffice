@@ -1,0 +1,35 @@
+# Sidecar de conversao DOCX -> PDF. Contrato HTTP (nosso, unica fonte da
+# verdade, replicado no godoc de internal/infra/pdfconv):
+#   POST /converter   corpo = bytes crus do .docx -> 200 + bytes crus do .pdf
+#   GET  /saude        -> 200 quando o unoserver respondeu de verdade a uma
+#                         chamada RPC (ver deploy/pdfconv-handler.py)
+#
+# Sem acesso a rede externa: ver o comentario no bloco `libreoffice:` de
+# deploy/docker-compose.yml.
+#
+# Base é debian:trixie-slim, NÃO python:3.12-slim: a imagem oficial do Python
+# compila seu próprio interpretador em /usr/local, separado do Python de
+# sistema do Debian. O pacote apt `python3-uno` só existe para o Python de
+# SISTEMA (o que a apt do trixie resolve, hoje 3.13); instalar `unoserver`
+# via pip no interpretador /usr/local (como fazia a imagem python:3.12-slim)
+# o deixa cego para o módulo `uno` que só está em
+# /usr/lib/python3/dist-packages do interpretador de sistema. Usar
+# debian:trixie-slim garante que apt e pip instalam no MESMO python3.
+FROM debian:trixie-slim@sha256:a99cfc517144bc59b1978475ec53b46ecabec7e43635402ee5b77cc54cd1b20a
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libreoffice-writer \
+        python3-uno \
+        python3-pip \
+        fonts-liberation2 \
+    && rm -rf /var/lib/apt/lists/*
+
+# --break-system-packages: instalar no MESMO python3 de sistema que tem o
+# módulo uno (ver comentário acima) — não criar venv, que isolaria de
+# /usr/lib/python3/dist-packages e reintroduziria o mesmo bug.
+RUN pip install --no-cache-dir --break-system-packages unoserver==3.7
+
+COPY deploy/pdfconv-handler.py /app/handler.py
+
+EXPOSE 2004
+ENTRYPOINT ["python3", "/app/handler.py"]

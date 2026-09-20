@@ -1,0 +1,45 @@
+groups:
+  - name: formatador
+    rules:
+      - alert: FilaDeJobsAcumulando
+        expr: sum(fila_profundidade) > 50
+        for: 10m
+        labels:
+          severidade: aviso
+        annotations:
+          resumo: "Mais de 50 jobs aguardando há 10 minutos"
+          acao: "Verificar se o worker está de pé e se o conversor responde"
+
+      - alert: TaxaDeFalhaDeJobAlta
+        expr: >
+          sum(rate(job_duracao_segundos_count{status="falhou"}[10m]))
+          / sum(rate(job_duracao_segundos_count[10m])) > 0.1
+        for: 10m
+        labels:
+          severidade: critico
+        annotations:
+          resumo: "Mais de 10% dos jobs falhando"
+
+      - alert: ConversaoLenta
+        expr: histogram_quantile(0.99, sum(rate(job_duracao_segundos_bucket[10m])) by (le)) > 120
+        for: 15m
+        labels:
+          severidade: aviso
+        annotations:
+          resumo: "p99 de duração de job acima de 2 minutos"
+
+      - alert: ApiIndisponivel
+        expr: up{job="formatador-api"} == 0
+        for: 2m
+        labels:
+          severidade: critico
+        annotations:
+          resumo: "API sem responder ao scrape do Prometheus"
+
+      - alert: CustoDeLLMEscalando
+        expr: sum(rate(llm_tokens_total[1h])) * 3600 > 500000
+        for: 30m
+        labels:
+          severidade: aviso
+        annotations:
+          resumo: "Consumo de tokens do classificador acima do esperado"

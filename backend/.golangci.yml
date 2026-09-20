@@ -1,0 +1,49 @@
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - bodyclose
+    - contextcheck
+    - errorlint
+    - gocritic
+    - gosec
+    - nilerr
+    - noctx
+    - prealloc
+    - revive
+    - unconvert
+    - unparam
+    - wastedassign
+
+  settings:
+    errcheck:
+      check-type-assertions: true
+    gosec:
+      excludes:
+        # G104 é coberto pelo errcheck.
+        - G104
+    revive:
+      rules:
+        - name: exported
+          disabled: true  # a documentação do projeto é em português
+
+  exclusions:
+    rules:
+      # Testes podem ignorar erro de fechamento e usar dados previsíveis.
+      - path: _test\.go
+        linters:
+          - gosec
+          - errcheck
+          - unparam
+
+formatters:
+  enable:
+    - gofmt

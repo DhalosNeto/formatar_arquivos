@@ -1,0 +1,13 @@
+# syntax=docker/dockerfile:1
+
+FROM docker.io/library/node:24-alpine AS dependencias
+WORKDIR /app
+COPY frontend/package.json frontend/package-lock.json* ./
+RUN npm ci || npm install
+
+FROM docker.io/library/node:24-alpine AS desenvolvimento
+WORKDIR /app
+COPY --from=dependencias /app/node_modules ./node_modules
+COPY frontend/ ./
+EXPOSE 5173
+CMD ["npm", "run", "dev", "--", "--host", "0.0.0.0"]

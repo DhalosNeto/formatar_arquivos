@@ -1,0 +1,32 @@
+# syntax=docker/dockerfile:1
+
+FROM docker.io/library/golang:1.26-alpine AS compilacao
+WORKDIR /origem
+RUN apk add --no-cache git
+COPY backend/go.mod backend/go.sum ./
+RUN go mod download
+COPY backend/ ./
+ARG VERSAO=dev
+RUN CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.versao=${VERSAO}" -o /saida/api ./cmd/api && \
+    CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.versao=${VERSAO}" -o /saida/worker ./cmd/worker && \
+    CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o /saida/rulesetctl ./cmd/rulesetctl
+
+FROM gcr.io/distroless/static-debian12:nonroot AS api
+COPY --from=compilacao /saida/api /api
+COPY backend/rulesets /rulesets
+COPY backend/migrations /migrations
+USER nonroot:nonroot
+EXPOSE 8080
+ENTRYPOINT ["/api"]
+
+FROM gcr.io/distroless/static-debian12:nonroot AS worker
+COPY --from=compilacao /saida/worker /worker
+COPY backend/rulesets /rulesets
+USER nonroot:nonroot
+ENTRYPOINT ["/worker"]
+
+FROM gcr.io/distroless/static-debian12:nonroot AS rulesetctl
+COPY --from=compilacao /saida/rulesetctl /rulesetctl
+COPY backend/rulesets /rulesets
+USER nonroot:nonroot
+ENTRYPOINT ["/rulesetctl"]

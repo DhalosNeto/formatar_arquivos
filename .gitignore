@@ -1,0 +1,28 @@
+# Go
+/backend/bin/
+*.test
+*.out
+coverage.out
+coverage.html
+
+# Node
+node_modules/
+/frontend/dist/
+/frontend/.vite/
+npm-debug.log*
+
+# Ambiente e segredos
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Artefatos locais
+/tmp/
+/deploy/dados/
+.DS_Store
+
+# Editor
+.idea/
+.vscode/
