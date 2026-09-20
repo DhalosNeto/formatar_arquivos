@@ -173,10 +173,16 @@ Legenda de estado: ✅ verde com prova · 🔴 TDD vermelho proposital · ⬜ va
 - `backend/internal/arquitetura/fronteira_test.go` — `TestDetectorDeFronteira`, `TestHTTPNaoDependeDoProcessamentoInterno`
 - Usa `go list -deps`. Escrito sobre o caminho **direto** de propósito: `cmd/api` vai importar `data/postgres` legitimamente e um teste ingênuo nunca falharia.
 
-## MOD: ooxml ⬜ (F2, não bloqueia F1)
+## MOD: ooxml 🟡 (F2 — round-trip pronto, CDM pendente)
 **keywords:** ooxml, docx, XML, w:pPr, w:rPr, w:sectPr, styles.xml, golden
 
-- ⬜ `backend/internal/infra/ooxml/` vazia. Ver skill `ooxml-referencia` e `docs/adr/0001-docx-in-place.md`.
+- `backend/internal/infra/ooxml/pacote.go` — `Documento`, `Abrir(io.ReaderAt, int64)`, `Salvar(io.Writer)`. 117 linhas, 96,4% de cobertura, 14 testes
+- **Round-trip é byte a byte**: SHA256 do ZIP de saída idêntico ao de entrada nos dois fixtures. É o teste que sustenta o ADR 0001
+- ⚠️ **Nada é desserializado nesta fase.** `zip.Writer.Copy` recopia cada entrada sem descomprimir, preservando método de compressão, ordem e timestamp. Parsear sem precisar mutar só daria ao `encoding/xml` a chance de reescrever namespace
+- ⚠️ Zip bomb **não** é conferido aqui de propósito: `Copy` não descomprime, e o upload já chama `vo.ConferirPacoteDocx`. O limite passa a importar quando a mutação descomprimir uma parte (F3)
+- Erro de estrutura é `ErroValidacao`; falha do meio de I/O é `ErroAplicacao`, distinguidas por um `io.ReaderAt` instrumentado
+- Fixtures: `testdata/artigo-real-libreoffice.docx` (10 partes, gerado pelo LibreOffice) e `artigo-desformatado.docx` (4 partes, sintético)
+- ⬜ falta: `domain/cdm`, heurística estrutural e as rotas de análise. Ver `docs/plano-backend.md`, F2
 
 ---
 

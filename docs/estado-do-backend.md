@@ -17,7 +17,7 @@ o contrato que o frontend consome, ver `contrato-api.md`.
 |---|---|---|
 | **F0** Fundação | esqueleto hexagonal, infra, compose, CI | ✅ concluída |
 | **F1** Ingestão e preview | upload, storage, conversão, fila, listagem | ✅ concluída |
-| **F2** Parser e CDM | `ooxml.Abrir`/`Salvar`, CDM, heurística | ⬜ não iniciada |
+| **F2** Parser e CDM | `ooxml.Abrir`/`Salvar`, CDM, heurística | 🟡 round-trip pronto |
 | **F3** Motor de formatação | ruleset, mutadores OOXML, ABNT 14724 | ⬜ não iniciada |
 | **F4** Citações e referências | parser, ABNT 6023/10520, APA 7 | ⬜ não iniciada |
 | **F5** LLM fallback | cliente Anthropic, limiar, teto de custo | ⬜ não iniciada |
@@ -90,6 +90,10 @@ schema e verificam Up/Down/Up.
   vazamento de nome de arquivo do usuário vira impossível pela forma do wire.
 - **`fila`** — laço de consumo com `FOR UPDATE SKIP LOCKED` sobre a tabela
   `jobs`. Sem River; ver `adr/0002-fila-sem-river.md`.
+- **`ooxml`** — abre e salva o pacote DOCX com round-trip **byte a byte**
+  (SHA256 idêntico). Nesta fase nada é desserializado: `zip.Writer.Copy` recopia
+  cada entrada sem descomprimir. A desserialização entra na F3, quando a mutação
+  precisar dela.
 - `config`, `errors`, `log`, `telemetry` — desde a F0.
 
 ### Sidecar de conversão
