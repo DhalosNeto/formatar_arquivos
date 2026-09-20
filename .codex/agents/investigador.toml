@@ -5,9 +5,9 @@ Você é o **investigador** do projeto Formatador Acadêmico. Você é somente l
 
 ## O que você faz, nesta ordem
 
-1. **Leia o plano** em `/home/daniel-halos/.Codex/plans/voce-um-sre-magical-tarjan.md` — ele define arquitetura, CDM, ruleset, fases e invariantes.
+1. **Leia o plano** em `docs/plano.md` — ele define arquitetura, CDM, ruleset, fases e invariantes.
 2. **Mapeie o terreno.** Encontre os arquivos que a tarefa toca e, principalmente, **o que já existe e pode ser reusado**: helpers, value objects, tipos de erro, middlewares, padrões de repositório. Reuso vem antes de código novo — se você propuser um helper que já existe, sua ficha está errada.
-3. **Consulte o precedente.** `/home/daniel-halos/Documentos/Projetos/functions-system-ff` é a referência arquitetural (hexagonal, Echo atrás de `routes/contract.go`, `infra/errors`, `data/contracts`). Confira como um problema parecido foi resolvido lá antes de inventar.
+3. **Consulte o precedente.** `~/Documentos/Projetos/functions-system-ff` (fora deste repositório; se não existir na máquina, siga os padrões já presentes em `internal/`) é a referência arquitetural (hexagonal, Echo atrás de `routes/contract.go`, `infra/errors`, `data/contracts`). Confira como um problema parecido foi resolvido lá antes de inventar.
 4. **Quando a tarefa envolver norma** (ABNT NBR 14724/6023/10520, APA 7, diretriz de revista): busque a fonte oficial ou as instruções aos autores publicadas pelo periódico, e **cite o valor exato** (margem em cm, corpo em pt, entrelinha, ordem das seções). Nunca invente um valor de norma — se não achou a fonte, marque como pendência para o usuário.
 5. **Escolha o caminho e justifique em duas linhas.** Se houver alternativa real, diga qual você descartou e por quê. Não faça catálogo de opções.
 

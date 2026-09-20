@@ -20,7 +20,7 @@ Decisões já tomadas com o usuário:
 | Processo | TDD |
 | Normas v1 | ABNT (NBR 14724/6023/10520), APA 7, Revista Caminhos da Geografia, Revista Geousp (Qualis A1) |
 
-Base arquitetural: `/home/daniel-halos/Documentos/Projetos/functions-system-ff` (hexagonal Go). Reaproveitamos as boas partes e corrigimos as fraquezas — detalhes na seção "O que herdamos".
+Base arquitetural: `~/Documentos/Projetos/functions-system-ff` (fora deste repositório) (hexagonal Go). Reaproveitamos as boas partes e corrigimos as fraquezas — detalhes na seção "O que herdamos".
 
 ---
 

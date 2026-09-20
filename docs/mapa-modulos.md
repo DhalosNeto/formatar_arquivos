@@ -152,7 +152,8 @@ Legenda de estado: ✅ verde com prova · 🔴 TDD vermelho proposital · ⬜ va
     MIGRACOES_REDE_CONTAINER=slirp4netns TESTCONTAINERS_RYUK_DISABLED=true \
     go test -tags=integration ./<pacote>/... -race -count=1
   ```
-- `golangci-lint` **não está no PATH**: `/home/daniel-halos/.cache/go-build/a7/a7b195705bae821695a7b931e2f355e7c4037848574f7c96ebf04fed6923c4e7-d/golangci-lint` (rodar também com `--build-tags=integration`)
+- `golangci-lint` não está no PATH. Use a mesma forma do `Makefile`:
+  `cd backend && go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest run ./...` (acrescente `--build-tags=integration` quando o alvo tiver teste com essa tag)
 - Imagens fixadas por **digest**. MinIO vem do **quay.io** (Docker Hub nega pull anônimo).
 
 ## MOD: arquitetura-fronteiras ✅

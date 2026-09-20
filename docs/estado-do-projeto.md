@@ -354,7 +354,7 @@ considerar na retomada.**
   Ryuk desligado é seguro: os testes registram cleanup explícito e `podman ps -a`
   ficou sem resíduo depois das execuções.
 - `golangci-lint` **não está no PATH**. Binário em
-  `/home/daniel-halos/.cache/go-build/a7/a7b195705bae821695a7b931e2f355e7c4037848574f7c96ebf04fed6923c4e7-d/golangci-lint`.
+  `go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest` (forma usada pelo `Makefile`; não dependa do binário em cache).
   Rodar também com `--build-tags=integration`.
 - MinIO vem do **quay.io** (Docker Hub nega pull anônimo de `minio/minio`), fixado
   por digest no teste. **Nunca** `podman system prune` global: há imagens do

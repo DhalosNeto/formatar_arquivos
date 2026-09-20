@@ -41,7 +41,7 @@ Pare imediatamente e reporte, sem seguir adiante, quando:
 
 F0 Fundação → F1 Ingestão e preview → F2 Parser e CDM → F3 Motor de formatação → F4 Citações e referências → F5 LLM fallback → F6 Tabelas/figuras e revistas reais → F7 Auth e formatos extras.
 
-O plano completo está em `/home/daniel-halos/.claude/plans/voce-um-sre-magical-tarjan.md`. Leia-o antes de quebrar qualquer fase.
+O plano completo está em `docs/plano.md`. Leia-o antes de quebrar qualquer fase.
 
 ## Regras duras
 
