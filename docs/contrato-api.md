@@ -165,6 +165,63 @@ Duas consequências práticas:
 **404** se o documento não existe ou é de outro dono. **409** se o documento
 autorizado ainda não tem preview. Confira `tem_preview` antes de pedir.
 
+### `POST /v1/documentos/{id}/analisar`
+
+Dispara a análise estrutural. **Assíncrona**: responde **202** com o job, não
+com o resultado.
+
+```json
+{ "id": "…", "documento_id": "…", "tipo": "analisar",
+  "status": "pendente", "progresso": 0, "criado_em": "2026-09-21T00:00:00Z" }
+```
+
+**Chamar duas vezes devolve o MESMO job**, com o mesmo `id` — a chave de
+idempotência é derivada do documento no servidor. Duplo clique no botão não
+cria duas análises concorrentes, então não é preciso desabilitá-lo por medo
+disso (desabilite por clareza, se quiser).
+
+Não há rota de job ainda. **Para saber quando terminou, consulte
+`GET /v1/documentos/{id}`** e observe o `status`: `recebido` → `analisando` →
+`analisado`, ou `falhou`.
+
+**404** se o documento não existe ou é de outro dono.
+
+### `GET /v1/documentos/{id}/estrutura`
+
+O CDM do documento — o que o sistema entendeu da estrutura dele.
+
+```json
+{ "versao": 1,
+  "blocos": [
+    { "papel": "titulo", "texto_resumo": "A PERCEPÇÃO DE ESTUDANTES…",
+      "confianca": 0.95, "origem": "estilo-docx", "ref_xml": 0 },
+    { "papel": "secao", "nivel": 1, "texto_resumo": "1 INTRODUÇÃO",
+      "confianca": 0.95, "origem": "estilo-docx", "ref_xml": 12 }
+  ] }
+```
+
+`nivel` **só aparece em `papel: "secao"`**. Não trate sua ausência como erro.
+
+`texto_resumo` é um trecho de **até 200 caracteres**, não o texto do bloco.
+Serve para o usuário reconhecer o bloco na tela; não reconstrua o documento a
+partir dele.
+
+`papel` ∈ `titulo`, `lista_autores`, `resumo`, `palavras_chave`, `secao`,
+`paragrafo`, `citacao`, `item_lista`, `tabela`, `figura`, `legenda`,
+`equacao`, `referencia`, `nota_rodape`.
+
+`origem` ∈ `estilo-docx`, `heuristica`, `llm`, `usuario` — quem classificou.
+`confianca` vai de 0 a 1. **Bloco de confiança baixa é onde o usuário mais
+provavelmente precisa corrigir**; vale destacar na interface.
+
+⚠️ **`lista_autores` nunca é devolvido hoje.** Nenhuma evidência textual
+confiável separa um nome de autor de um parágrafo comum, então autores e
+afiliações vêm como `paragrafo` com confiança baixa. É trabalho da correção
+manual ou da camada de LLM (F5).
+
+**409** se o documento ainda não foi analisado — confira o `status` antes.
+**404** se não existe ou é de outro dono.
+
 ---
 
 ## Valores de `status`
@@ -178,9 +235,10 @@ autorizado ainda não tem preview. Confira `tem_preview` antes de pedir.
 | `formatado` | artefatos prontos para download (F3) |
 | `falhou` | processamento interrompido por erro |
 
-No fluxo HTTP síncrono atual, o upload bem-sucedido devolve `recebido`.
-As transições de processamento já existem no domínio, mas o upload não
-enfileira jobs; análise e formatação ainda não são expostas pela API.
+O upload bem-sucedido devolve `recebido` — a conversão do preview é síncrona.
+A **análise** é assíncrona: `POST .../analisar` devolve 202 e o status caminha
+`recebido` → `analisando` → `analisado`, ou `falhou`. A formatação (F3) ainda
+não é exposta.
 
 ---
 
@@ -188,7 +246,9 @@ enfileira jobs; análise e formatação ainda não são expostas pela API.
 
 Não construa tela para estes; eles chegam nas fases seguintes:
 
-- estrutura detectada do documento e correção manual de papel de bloco (F2)
+- correção manual de papel de bloco — `PATCH .../estrutura` (F2, próximo recorte)
+- consulta de job por id — `GET /v1/jobs/{id}` (F2, próximo recorte). Até lá,
+  acompanhe pelo `status` do documento
 - catálogo de revistas e escolha de ruleset (F3)
 - disparar formatação e baixar DOCX/PDF/LaTeX (F3, F7)
 - acompanhamento de job por polling ou SSE (F2/F3)

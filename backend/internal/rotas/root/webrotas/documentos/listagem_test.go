@@ -77,7 +77,8 @@ func controladorComEspiaDeTeste(t *testing.T) (*Controlador, *repositorioEspiaLi
 	exigirSemErroDocumentos(t, err)
 	servico, err := webservices.NovoServicoDocumento(docservico, armazenadorMemoria{}, conversorMemoria{})
 	exigirSemErroDocumentos(t, err)
-	return NovoControlador(servico), repo
+	analise := analiseDeTeste(t, docservico)
+	return NovoControlador(servico, analise), repo
 }
 
 // TestTratarListagemSemCookieDevolveListaVazia: quem nunca enviou nada não

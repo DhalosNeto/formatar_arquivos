@@ -146,9 +146,16 @@ confere o SHA256 do pacote depois de extrair.
 envelope `{"versao":1,"blocos":[...]}`. Round-trip dos 40 blocos do artigo
 real verificado, e a saída passa em `entity.ValidarCDM`.
 
-⬜ **Falta para fechar a fase:** as rotas de análise. A serialização existe,
-mas ninguém ainda chama `DefinirCDM` — é preciso um caso de uso de análise que
-rode o pipeline, persista o índice e mova o status.
+✅ **Análise funciona ponta a ponta pela fila**, verificado contra a stack
+real: `POST .../analisar` devolve 202 (idempotente — duas chamadas, o mesmo
+job), o worker reivindica, roda `ooxml.AnalisarEstrutura`, persiste via
+`ConcluirAnalise`, e `GET .../estrutura` devolve os 40 blocos do artigo.
+Falha em qualquer etapa chama `MarcarFalha`: documento não fica preso em
+`analisando`.
+
+⬜ **Falta para fechar a fase:** `PATCH .../estrutura` (correção manual) e
+`GET /v1/jobs/{id}`. O PATCH exige uma porta de escrita do CDM escopada ao
+dono — `DefinirCDM` só existe em `DocumentoInternoRepo`, sem `vo.Dono`.
 
 ### Onde costuma dar errado
 

@@ -17,7 +17,7 @@ o contrato que o frontend consome, ver `contrato-api.md`.
 |---|---|---|
 | **F0** Fundação | esqueleto hexagonal, infra, compose, CI | ✅ concluída |
 | **F1** Ingestão e preview | upload, storage, conversão síncrona, listagem | ✅ funcional fechada; sem prontidão de produção |
-| **F2** Parser e CDM | `ooxml.Abrir`/`Salvar`, CDM, heurística | 🟡 extração, CDM, as duas camadas e a serialização verdes; faltam as rotas de análise |
+| **F2** Parser e CDM | `ooxml.Abrir`/`Salvar`, CDM, heurística | 🟡 análise funciona ponta a ponta pela fila; faltam `PATCH .../estrutura` e `GET /v1/jobs/{id}` |
 | **F3** Motor de formatação | ruleset, mutadores OOXML, ABNT 14724 | ⬜ não iniciada |
 | **F4** Citações e referências | parser, ABNT 6023/10520, APA 7 | ⬜ não iniciada |
 | **F5** LLM fallback | cliente Anthropic, limiar, teto de custo | ⬜ não iniciada |
@@ -47,6 +47,44 @@ Medições fornecidas na revisão, sem repetir integrações nesta edição docu
   **não repetida** nesta revisão; existe evidência histórica separada.
 - Round-trip: **PASS, 96,4%**, executando apenas `pacote.go` e
   `pacote_test.go`; **não** é resultado do pacote OOXML inteiro.
+
+### Medição de 21/09 — análise ponta a ponta, contra a stack real
+
+Executado contra Postgres, MinIO, sidecar e worker de verdade, não dublês:
+
+```
+POST /v1/documentos                      201  status=recebido
+POST /v1/documentos/{id}/analisar        202  job pendente
+POST /v1/documentos/{id}/analisar (2ª)   202  MESMO job id  <- idempotência
+GET  /v1/documentos/{id}                      status=analisado
+GET  /v1/documentos/{id}/estrutura       200  versao=1, 40 blocos
+```
+
+Papéis conferidos na resposta real: `titulo`, `secao(1)`, `resumo`,
+`palavras_chave`, `secao(2)`, `legenda`, `tabela`, `referencia`. A chave
+`nivel` sai apenas em `secao`.
+
+**Regra 7 verificada na linha do banco**, não só por teste:
+`jobs.resultado` = `{"blocos": 40}`. O CDM completo, que carrega
+`texto_resumo`, fica no documento — onde a autorização por dono se aplica —
+e não é replicado numa tabela com outra fronteira de acesso.
+
+**O bug de classificação de erro foi testado corrompendo o CDM no banco de
+verdade:**
+
+```
+GET /estrutura  ->  500 {"codigo":"erro_interno"}   (nunca 400)
+ocorrências do texto do documento no log da api: 0
+```
+
+`cdm.Desserializar` devolve `ErroValidacao` e `errors.Envolver` não
+reclassifica — sem `erroCDMCorrompido` em `ObterEstrutura`, uma linha
+corrompida viraria "requisição inválida" culpando o cliente por um GET. É o
+mesmo bug que já aconteceu em `scanDocumento`.
+
+⚠️ **Armadilha de ambiente, custou duas rodadas:** `podman-compose up -d <svc>`
+**reaproveita o container existente** e não troca a imagem. Sem `podman rm -f`
+antes, você depura código que não está rodando.
 
 ### Medição de 20/09 — serialização do CDM
 
@@ -237,8 +275,9 @@ serviço real.**
 | — | Worker já executa o laço, mas o upload converte síncrono e não enfileira. Falta gravar o preview no documento pela porta interna; hoje o executor grava a chave no resultado do job. |
 | — | Se a finalização (`Concluir`/`Falhar`) falha, falta recuperação do job preso em `executando`; `WithoutCancel` não resolve falha de persistência. |
 | — | `InserirOuObter` requer READ COMMITTED, mas `Begin` herda o padrão da conexão. |
-| — | F2 aberta: falta expor `POST .../analisar`, `GET/PATCH .../estrutura` e `GET /v1/jobs/{id}`. A serialização já existe; ninguém ainda CHAMA `DefinirCDM`. |
-| — | `Desserializar` devolve `ErroValidacao`; a reclassificação ao ler do banco (padrão `erroLinhaCorrompida`) ainda precisa ser escrita quando o repositório passar a ler o CDM. |
+| — | F2 aberta: faltam `PATCH .../estrutura` (correção manual) e `GET /v1/jobs/{id}`. Sem o PATCH, `OrigemUsuario` é proteção que o domínio tem e a API não expõe. |
+| — | `PATCH .../estrutura` vai exigir uma porta de escrita do CDM **escopada ao dono**: `DefinirCDM` vive em `DocumentoInternoRepo`, sem `vo.Dono`. |
+| — | O laço da fila não tem backoff nem teto de tentativas: job de análise que falha é reivindicado de novo sem espera. `tentativas` é contado, mas ninguém o consulta. |
 | — | `ListaAutores` não é identificada por nenhuma camada determinística; depende da F5 ou de correção manual. |
 | — | Nenhuma auditoria independente de `validador`/`seguranca` rodou sobre os recortes do CDM (camadas 1 e 2). |
 | — | `backend/rulesets/` vazio: nenhum valor de norma escrito. Bloqueia a F3. |

@@ -47,23 +47,25 @@ func classificarFixtureReal(t *testing.T) []cdm.Bloco {
 	return saida
 }
 
-// TestAplicarHeuristicaFixtureRealIdentificaEstruturaDoArtigo é o teste de
-// ponta a ponta da F2: papel esperado por índice, derivado das cinco regras
-// da camada 2 e da classificação por estilo da camada 1 (ficha do
-// investigador). Índices 1..5 (título em inglês e autores/afiliação) não
-// batem com NENHUMA regra deste recorte — nenhuma evidência textual confiável
-// separa "Maria Eduarda Nogueira Prado" de um parágrafo comum. Ficam como a
-// camada 1 deixou (Paragrafo, veio de estilo "Normal"); identificar
-// ListaAutores fica para a camada de LLM (F5) ou correção manual do usuário —
-// não é uma regra inventada aqui.
-func TestAplicarHeuristicaFixtureRealIdentificaEstruturaDoArtigo(t *testing.T) {
-	t.Parallel()
-
-	saida := classificarFixtureReal(t)
-
-	esperados := map[int]cdm.Papel{
+// expectativaFixtureReal40Blocos é o papel esperado por índice para o artigo
+// real (artigo-real-libreoffice.docx), derivado das cinco regras da camada 2
+// e da classificação por estilo da camada 1 (ficha do investigador). Índices
+// 1..5 (título em inglês e autores/afiliação) não batem com NENHUMA regra
+// deste recorte — nenhuma evidência textual confiável separa "Maria Eduarda
+// Nogueira Prado" de um parágrafo comum. Ficam como a camada 1 deixou
+// (Paragrafo, veio de estilo "Normal"); identificar ListaAutores fica para a
+// camada de LLM (F5) ou correção manual do usuário — não é uma regra
+// inventada aqui.
+//
+// Extraído para função compartilhada (em vez de duplicado) porque
+// analisar_estrutura_test.go, em outro arquivo deste mesmo pacote, precisa da
+// MESMA expectativa para provar que AnalisarEstrutura (Abrir->ExtrairBlocos->
+// ClassificarPorEstiloDocx->AplicarHeuristica) produz o mesmo resultado que o
+// pipeline manual já testado aqui.
+func expectativaFixtureReal40Blocos() map[int]cdm.Papel {
+	return map[int]cdm.Papel{
 		0:  cdm.Titulo,
-		1:  cdm.Paragrafo, // título em inglês — sem regra desta camada, ver comentário do teste
+		1:  cdm.Paragrafo, // título em inglês — sem regra desta camada, ver comentário da função
 		2:  cdm.Paragrafo, // autor — idem
 		3:  cdm.Paragrafo, // afiliação — idem
 		4:  cdm.Paragrafo, // autor — idem
@@ -103,6 +105,18 @@ func TestAplicarHeuristicaFixtureRealIdentificaEstruturaDoArtigo(t *testing.T) {
 		38: cdm.Referencia,
 		39: cdm.Referencia, // região de referências vai até o fim do documento, sem próximo cabeçalho
 	}
+}
+
+// TestAplicarHeuristicaFixtureRealIdentificaEstruturaDoArtigo é o teste de
+// ponta a ponta da F2: papel esperado por índice, contra o pipeline manual
+// (extrair -> camada 1 -> camada 2) chamado passo a passo por
+// classificarFixtureReal.
+func TestAplicarHeuristicaFixtureRealIdentificaEstruturaDoArtigo(t *testing.T) {
+	t.Parallel()
+
+	saida := classificarFixtureReal(t)
+
+	esperados := expectativaFixtureReal40Blocos()
 	require.Len(t, esperados, 40, "ficha de expectativa incompleta: precisa cobrir os 40 blocos do fixture")
 
 	for indice := 0; indice < 40; indice++ {

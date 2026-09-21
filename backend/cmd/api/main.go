@@ -17,6 +17,7 @@ import (
 	"github.com/daniel-halos/formatador/internal/application/web/webservices"
 	"github.com/daniel-halos/formatador/internal/data/postgres"
 	documentoservice "github.com/daniel-halos/formatador/internal/domain/documento/service"
+	"github.com/daniel-halos/formatador/internal/domain/job/criacao"
 	"github.com/daniel-halos/formatador/internal/infra/config"
 	"github.com/daniel-halos/formatador/internal/infra/log"
 	"github.com/daniel-halos/formatador/internal/infra/pdfconv"
@@ -91,6 +92,16 @@ func executar() error {
 		return err
 	}
 
+	servicoCriacaoJob, err := criacao.NovoServico(gerenciador.JobsCriacao(), servicoDominio)
+	if err != nil {
+		return err
+	}
+
+	servicoAnalise, err := webservices.NovoServicoAnalise(servicoDominio, servicoCriacaoJob)
+	if err != nil {
+		return err
+	}
+
 	servidorHTTP := servidor.Novo(servidor.Opcoes{
 		Config:      cfg,
 		Metricas:    metricas,
@@ -99,7 +110,7 @@ func executar() error {
 		Dependencias: root.Dependencias{
 			Saude: saude.NovoControlador(versao, gerenciador,
 				storage.NovoVerificador(clienteStorage), pdfconv.NovoVerificador(conversor)),
-			Documentos: documentos.NovoControlador(servicoDocumento),
+			Documentos: documentos.NovoControlador(servicoDocumento, servicoAnalise),
 			// Teto de transporte com folga sobre o teto de negócio: o
 			// multipart carrega boundary e cabeçalhos além do arquivo, então
 			// cortar no valor exato reprovaria upload legítimo no limite.

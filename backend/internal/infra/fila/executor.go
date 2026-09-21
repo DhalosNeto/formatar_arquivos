@@ -6,10 +6,14 @@ import (
 	"encoding/json"
 	"io"
 
+	"github.com/google/uuid"
+
+	"github.com/daniel-halos/formatador/internal/domain/cdm"
 	"github.com/daniel-halos/formatador/internal/domain/documento/processamento"
 	"github.com/daniel-halos/formatador/internal/domain/job/entity"
 	"github.com/daniel-halos/formatador/internal/domain/vo"
 	"github.com/daniel-halos/formatador/internal/infra/errors"
+	"github.com/daniel-halos/formatador/internal/infra/ooxml"
 )
 
 // ArmazenadorObjetos é a porta de storage usada pelo executor de documento.
@@ -32,9 +36,19 @@ type resultadoRenderizarPreview struct {
 	ChavePreviewPDF string `json:"chave_preview_pdf"`
 }
 
+// resultadoAnalisar é o que fica em jobs.resultado depois de uma análise:
+// quantos blocos foram classificados, e nada além disso. O CDM completo —
+// que carrega trecho do documento em TextoResumo — é gravado no DOCUMENTO
+// por ConcluirAnalise, onde a regra de acesso por dono se aplica. Repeti-lo
+// aqui o espalharia para uma tabela com outra fronteira de acesso.
+type resultadoAnalisar struct {
+	Blocos int `json:"blocos"`
+}
+
 // ExecutorDocumento roda o trabalho de fato dos jobs de documento para o
-// laço da fila. Hoje só sabe renderizar_preview (DOCX -> PDF); qualquer
-// outro tipo falha com erro claro, nunca é ignorado silenciosamente.
+// laço da fila. Sabe renderizar_preview (DOCX -> PDF) e analisar (DOCX ->
+// CDM); qualquer outro tipo falha com erro claro, nunca é ignorado
+// silenciosamente.
 type ExecutorDocumento struct {
 	documentos  *processamento.ServicoInterno
 	armazenador ArmazenadorObjetos
@@ -62,10 +76,93 @@ func NovoExecutorDocumento(
 // Executar despacha o job pelo tipo. Tipo desconhecido ou ainda não
 // suportado pelo worker devolve erro, nunca sucesso silencioso.
 func (e *ExecutorDocumento) Executar(ctx context.Context, job entity.Job) (json.RawMessage, error) {
-	if job.Tipo != entity.TipoRenderizarPreview {
-		return nil, errors.NovoErroAplicacao("tipo de job não suportado pelo worker: " + job.Tipo.String())
+	switch job.Tipo {
+	case entity.TipoRenderizarPreview:
+		return e.renderizarPreview(ctx, job)
+	case entity.TipoAnalisar:
+		return e.analisar(ctx, job)
 	}
-	return e.renderizarPreview(ctx, job)
+	return nil, errors.NovoErroAplicacao("tipo de job não suportado pelo worker: " + job.Tipo.String())
+}
+
+// analisar extrai a estrutura do DOCX e grava o CDM no documento.
+//
+// Toda saída por erro passa por marcarFalha: sem isso, uma falha no meio do
+// caminho deixaria o documento parado em `analisando` PARA SEMPRE, e o
+// usuário veria um carregamento que nunca termina. É o modo de falha mais
+// provável aqui e o mais silencioso.
+func (e *ExecutorDocumento) analisar(ctx context.Context, job entity.Job) (json.RawMessage, error) {
+	if _, err := e.documentos.IniciarAnalise(ctx, job.DocumentoID); err != nil {
+		// Ainda não saiu de `recebido`: não há do que marcar falha, e
+		// MarcarFalha aqui mascararia uma disputa entre dois workers.
+		return nil, errors.Envolver(err, "iniciar análise do documento")
+	}
+
+	resultado, err := e.extrairCDM(ctx, job)
+	if err != nil {
+		e.marcarFalha(ctx, job.DocumentoID)
+		return nil, err
+	}
+	return resultado, nil
+}
+
+// extrairCDM é o caminho feliz isolado, para que analisar tenha um único
+// ponto de tratamento de falha em vez de repetir marcarFalha em cada etapa.
+func (e *ExecutorDocumento) extrairCDM(ctx context.Context, job entity.Job) (json.RawMessage, error) {
+	documento, err := e.documentos.ObterPorIDInterno(ctx, job.DocumentoID)
+	if err != nil {
+		return nil, errors.Envolver(err, "obter documento para analisar")
+	}
+
+	conteudo, err := e.baixarOriginal(ctx, documento.ChaveStorage)
+	if err != nil {
+		return nil, err
+	}
+
+	blocos, err := ooxml.AnalisarEstrutura(conteudo)
+	if err != nil {
+		// Sem Envolver: a mensagem de ooxml é fixa e não cita conteúdo, mas
+		// encadear contexto aqui também não acrescentaria nada útil ao log.
+		return nil, errors.Envolver(err, "analisar estrutura do documento")
+	}
+
+	indice, err := cdm.NovoIndice(blocos).Serializar()
+	if err != nil {
+		return nil, errors.Envolver(err, "serializar cdm do documento")
+	}
+
+	if _, err := e.documentos.ConcluirAnalise(ctx, job.DocumentoID, indice); err != nil {
+		return nil, errors.Envolver(err, "gravar cdm do documento")
+	}
+
+	resultado, err := json.Marshal(resultadoAnalisar{Blocos: len(blocos)})
+	if err != nil {
+		return nil, errors.Envolver(err, "montar resultado do job de análise")
+	}
+	return resultado, nil
+}
+
+// marcarFalha devolve o documento a um estado terminal. O erro daqui é
+// deliberadamente engolido: o erro que importa é o da análise, e sobrescrevê-lo
+// pelo da marcação esconderia a causa real. Um documento que não consegue nem
+// ser marcado como falho é problema de banco, que o log do laço já registra.
+func (e *ExecutorDocumento) marcarFalha(ctx context.Context, documentoID uuid.UUID) {
+	_, _ = e.documentos.MarcarFalha(ctx, documentoID)
+}
+
+// baixarOriginal lê o arquivo original do documento do storage.
+func (e *ExecutorDocumento) baixarOriginal(ctx context.Context, chave vo.ChaveStorage) ([]byte, error) {
+	original, err := e.armazenador.Obter(ctx, chave)
+	if err != nil {
+		return nil, errors.Envolver(err, "obter arquivo original do documento")
+	}
+	defer func() { _ = original.Close() }()
+
+	conteudo, err := io.ReadAll(original)
+	if err != nil {
+		return nil, errors.Envolver(err, "ler arquivo original do documento")
+	}
+	return conteudo, nil
 }
 
 // renderizarPreview baixa o original do storage, converte para PDF e grava o
@@ -78,15 +175,9 @@ func (e *ExecutorDocumento) renderizarPreview(ctx context.Context, job entity.Jo
 		return nil, errors.Envolver(err, "obter documento para renderizar preview")
 	}
 
-	original, err := e.armazenador.Obter(ctx, documento.ChaveStorage)
+	conteudo, err := e.baixarOriginal(ctx, documento.ChaveStorage)
 	if err != nil {
-		return nil, errors.Envolver(err, "obter arquivo original do documento")
-	}
-	defer func() { _ = original.Close() }()
-
-	conteudo, err := io.ReadAll(original)
-	if err != nil {
-		return nil, errors.Envolver(err, "ler arquivo original do documento")
+		return nil, err
 	}
 
 	pdf, err := e.conversor.ConverterParaPDF(ctx, conteudo)

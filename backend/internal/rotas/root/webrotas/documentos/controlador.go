@@ -19,6 +19,10 @@ const (
 	CaminhoColecao = "/documentos"
 	CaminhoItem    = "/documentos/:id"
 	CaminhoPreview = "/documentos/:id/preview"
+	// CaminhoAnalise dispara a análise estrutural; CaminhoEstrutura devolve o
+	// CDM resultante.
+	CaminhoAnalise   = "/documentos/:id/analisar"
+	CaminhoEstrutura = "/documentos/:id/estrutura"
 )
 
 // CampoArquivo é o nome do campo multipart que carrega o arquivo enviado.
@@ -36,11 +40,12 @@ const campoID = "id"
 // Controlador atende os endpoints HTTP de documentos.
 type Controlador struct {
 	servico *webservices.ServicoDocumento
+	analise *webservices.ServicoAnalise
 }
 
 // NovoControlador cria o controlador de documentos.
-func NovoControlador(servico *webservices.ServicoDocumento) *Controlador {
-	return &Controlador{servico: servico}
+func NovoControlador(servico *webservices.ServicoDocumento, analise *webservices.ServicoAnalise) *Controlador {
+	return &Controlador{servico: servico, analise: analise}
 }
 
 // TratarCriacao recebe o upload multipart, garante a sessão do solicitante e
@@ -146,4 +151,47 @@ func (c *Controlador) TratarPreview(ctx context.Context, requisicao rotas.Requis
 		return rotasutil.TratarErro(ctx, resposta, err)
 	}
 	return resposta.Ok(preview)
+}
+
+// TratarAnalise enfileira a análise estrutural do documento.
+//
+// Responde 202, não 200: a análise é assíncrona e o corpo devolvido é o job,
+// não o resultado. Chamar duas vezes devolve o MESMO job — a idempotência
+// vem da chave derivada em ServicoAnalise, não de um controle aqui.
+func (c *Controlador) TratarAnalise(ctx context.Context, requisicao rotas.Requisicao, resposta rotas.Resposta) error {
+	id, err := uuid.Parse(requisicao.Parametro(campoID))
+	if err != nil {
+		return rotasutil.TratarErro(ctx, resposta, errors.NovoErroValidacao(campoID, mensagemIDInvalido))
+	}
+
+	dono, err := sessaoExistente(requisicao)
+	if err != nil {
+		return rotasutil.TratarErro(ctx, resposta, err)
+	}
+
+	job, err := c.analise.Analisar(ctx, dono, id)
+	if err != nil {
+		return rotasutil.TratarErro(ctx, resposta, err)
+	}
+	return resposta.Aceito(job)
+}
+
+// TratarEstrutura devolve o CDM do documento. Documento ainda sem análise é
+// conflito, não ausência — mesma postura de TratarPreview.
+func (c *Controlador) TratarEstrutura(ctx context.Context, requisicao rotas.Requisicao, resposta rotas.Resposta) error {
+	id, err := uuid.Parse(requisicao.Parametro(campoID))
+	if err != nil {
+		return rotasutil.TratarErro(ctx, resposta, errors.NovoErroValidacao(campoID, mensagemIDInvalido))
+	}
+
+	dono, err := sessaoExistente(requisicao)
+	if err != nil {
+		return rotasutil.TratarErro(ctx, resposta, err)
+	}
+
+	estrutura, err := c.analise.ObterEstrutura(ctx, dono, id)
+	if err != nil {
+		return rotasutil.TratarErro(ctx, resposta, err)
+	}
+	return resposta.Ok(estrutura)
 }
