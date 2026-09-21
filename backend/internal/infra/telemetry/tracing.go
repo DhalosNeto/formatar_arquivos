@@ -9,7 +9,7 @@ import (
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
-	semconv "go.opentelemetry.io/otel/semconv/v1.34.0"
+	semconv "go.opentelemetry.io/otel/semconv/v1.43.0"
 
 	"github.com/daniel-halos/formatador/internal/infra/errors"
 )
@@ -30,10 +30,17 @@ func IniciarTracing(ctx context.Context, endpointOTLP, nomeServico, ambiente str
 		return nil, errors.Envolver(err, "ao criar o exportador OTLP")
 	}
 
+	// A versão do semconv importado acima precisa bater com a que
+	// resource.Default() usa no SDK em uso: Merge RECUSA schemas
+	// conflitantes em vez de escolher um. Com v1.34.0 contra o Default do
+	// SDK 1.46.0 (v1.43.0), isto falhava e derrubava api e worker na
+	// partida — mas SÓ com OTEL_EXPORTER_OTLP_ENDPOINT definido, que é o
+	// caso do compose e não o do `go run` local. Ao subir o SDK, confira
+	// este import junto.
 	recursos, err := resource.Merge(resource.Default(), resource.NewWithAttributes(
 		semconv.SchemaURL,
 		semconv.ServiceName(nomeServico),
-		semconv.DeploymentEnvironmentName(ambiente),
+		semconv.DeploymentEnvironmentNameKey.String(ambiente),
 	))
 	if err != nil {
 		return nil, errors.Envolver(err, "ao montar os atributos do serviço")
