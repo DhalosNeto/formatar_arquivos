@@ -16,6 +16,8 @@ import (
 // deploy/Dockerfile.libreoffice e no docstring de deploy/pdfconv-handler.py:
 //
 //	POST /converter  corpo = bytes crus do .docx (SEM multipart) -> 200 + bytes crus do .pdf
+//	                 503 quando o sidecar está no teto de conversões simultâneas
+//	                 504 quando a conversão estourou o prazo e foi morta
 //	GET  /saude       -> 200 quando o sidecar respondeu de verdade a uma
 //	                     chamada RPC ao unoserver interno; 503 caso contrário.
 const (
@@ -98,7 +100,17 @@ func (c *Cliente) ConverterParaPDF(ctx context.Context, docx []byte) ([]byte, er
 	}
 	defer func() { _ = resposta.Body.Close() }()
 
-	if resposta.StatusCode != http.StatusOK {
+	// 503 e 504 são condições TRANSITÓRIAS do sidecar (fila cheia, prazo
+	// estourado), não defeito do documento. Todas continuam virando 500 para
+	// quem chama a API — o cliente não errou nada —, mas a mensagem as separa
+	// no log, que é o que permite decidir entre reenfileirar e desistir.
+	switch resposta.StatusCode {
+	case http.StatusOK:
+	case http.StatusServiceUnavailable:
+		return nil, errors.NovoErroAplicacao("conversor saturado")
+	case http.StatusGatewayTimeout:
+		return nil, errors.NovoErroAplicacao("conversão excedeu o prazo do conversor")
+	default:
 		return nil, errors.NovoErroAplicacao("conversão falhou")
 	}
 

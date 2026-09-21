@@ -25,6 +25,12 @@ jobs:
           python3 -m unittest discover -s scripts -p 'test_*.py'
           python3 scripts/sincronizar_instrucoes.py --check
 
+      # O handler do sidecar só importa stdlib: os limites de concorrência e
+      # de prazo são testáveis sem container e sem LibreOffice.
+      - name: Limites do sidecar de conversão
+        working-directory: .
+        run: python3 -m unittest discover -s deploy -p 'test_*.py'
+
       - uses: actions/setup-go@v5
         with:
           go-version: "1.26"

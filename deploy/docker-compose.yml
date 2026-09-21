@@ -28,6 +28,7 @@ services:
         condition: service_healthy
       libreoffice:
         condition: service_healthy
+    networks: [default, sem-saida]
     restart: unless-stopped
 
   worker:
@@ -53,6 +54,7 @@ services:
         condition: service_healthy
       libreoffice:
         condition: service_healthy
+    networks: [default, sem-saida]
     restart: unless-stopped
 
   web:
@@ -113,23 +115,37 @@ services:
       echo 'bucket documentos pronto (sem acesso anônimo)'
       "
 
-  # Conversão DOCX -> PDF. Sem acesso à rede externa: o documento do usuário
-  # nunca deve poder disparar requisição de saída a partir daqui.
-  # Sidecar próprio (não é imagem de terceiro): ver
+  # Conversão DOCX -> PDF. Sidecar próprio, não imagem de terceiro: ver
   # deploy/Dockerfile.libreoffice para o contrato HTTP e o porquê da troca.
-  # PENDENTE (registrado, não resolvido neste recorte):
-  #   1. isolar a rede deste serviço (network: internal: true) para o
-  #      LibreOffice não ter saída para a internet ao processar um DOCX
-  #      malicioso com OLE/imagem remota -- exige atribuir a mesma rede
-  #      também a api e worker, senão eles perdem acesso ao sidecar.
-  #   2. a porta 2004 é publicada no host sem autenticação: quem alcança o
-  #      host contorna a validação de formato que a API faz antes de converter.
+  #
+  # SEM porta publicada no host, de propósito. Publicar 2004 dava a qualquer
+  # processo do host uma rota direta ao conversor, contornando toda a
+  # validação de formato que a API faz antes de converter. O sidecar só é
+  # alcançável por api e worker, pela rede interna. Para depurar à mão, use
+  # `podman compose exec libreoffice ...` em vez de reabrir a porta.
+  #
+  # SEM saída para a internet (rede `sem-saida`, internal: true). Um DOCX
+  # malicioso pode carregar referência remota (OLE, imagem por URL) que o
+  # LibreOffice tenta buscar ao renderizar — é vetor de SSRF e de
+  # exfiltração do conteúdo do documento. Sem rota de saída, a busca falha.
+  # api e worker ficam nas DUAS redes: perderiam o sidecar se ficassem só na
+  # padrão, e perderiam Postgres/MinIO/Jaeger se ficassem só na isolada.
   libreoffice:
     build:
       context: ..
       dockerfile: deploy/Dockerfile.libreoffice
-    ports:
-      - "2004:2004"
+    networks: [sem-saida]
+    # Teto de recursos: uma renderização do LibreOffice é o processo mais
+    # pesado do compose. Sem teto, um documento patológico leva o host junto.
+    # Combina com PDFCONV_MAXIMO_SIMULTANEAS no handler: o semáforo evita
+    # chegar no limite, e o limite é a rede de segurança se o semáforo estiver
+    # mal dimensionado.
+    mem_limit: 2g
+    cpus: 2.0
+    pids_limit: 512
+    environment:
+      PDFCONV_MAXIMO_SIMULTANEAS: "2"
+      PDFCONV_PRAZO_SEGUNDOS: "120"
     # /saude faz uma chamada RPC de verdade ao unoserver, não um teste de
     # porta aberta: o LibreOffice aceita conexão antes de conseguir converter.
     # Por isso start_period é generoso — subida fria leva dezenas de segundos,
@@ -177,6 +193,14 @@ services:
       - grafana_dados:/var/lib/grafana
     depends_on:
       - prometheus
+
+networks:
+  default:
+  # internal: true remove a rota de saída: containers nesta rede falam entre
+  # si e com mais ninguém. É o controle que impede o LibreOffice de buscar
+  # conteúdo remoto embutido num documento do usuário.
+  sem-saida:
+    internal: true
 
 volumes:
   postgres_dados:

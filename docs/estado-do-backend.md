@@ -213,10 +213,7 @@ serviço real.**
 
 | Severidade | Item |
 |---|---|
-| ALTO | Porta 2004 do conversor publicada sem autenticação: chamada direta contorna a validação do VO na API. Achado de revisão estática; não liberado para exposição pública. |
-| ALTO | Conversor sem limite explícito de concorrência, prazo de processamento e recursos. Limites de tamanho e timeout do cliente não estabelecem esses controles no sidecar. |
-| ALTO | Porta 2004 publicada no host: quem alcança o host contorna a validação de formato que a API faz antes de converter. O `healthcheck` acrescentado **não** é um controle de acesso. |
-| MÉDIO | Sidecar de conversão tem saída para a internet — risco conhecido de busca remota e exfiltração por DOCX malicioso. Isolamento de rede segue pendente. |
+| MÉDIO | Prazo e concorrência do conversor são limitados no handler, não em cgroup do LibreOffice: um processo filho que ignore SIGKILL do `subprocess` ainda escaparia. `mem_limit`/`pids_limit` são a rede de segurança, não prova de contenção. |
 | — | Compose usa `http://minio:9000` também nas URLs assinadas: risco de host inacessível ao browser, inferido do código; não validado por E2E nesta revisão. |
 | — | `internal/domain/job/service` é spec legada RED, superada por `job/criacao` + `job/consulta` + `job/execucao`; mantém a suíte global vermelha. Não implica decisão de implementar a API antiga. |
 | — | Worker já executa o laço, mas o upload converte síncrono e não enfileira. Falta gravar o preview no documento pela porta interna; hoje o executor grava a chave no resultado do job. |
@@ -229,10 +226,41 @@ serviço real.**
 
 ---
 
+## Bug que só o compose pegou: api e worker não subiam
+
+Registro à parte porque a lição é diferente das quatro da tabela acima.
+
+`telemetry.IniciarTracing` chamava `resource.Merge` com `semconv/v1.34.0`
+contra o `resource.Default()` do SDK 1.46.0, que usa `1.43.0`. **`Merge`
+recusa schemas conflitantes em vez de escolher um**, então os dois processos
+morriam na partida, em laço de restart:
+
+```
+falha ao iniciar o worker: telemetry.IniciarTracing: ao montar os atributos
+do serviço => conflicting Schema URL: .../1.43.0 and .../1.34.0
+```
+
+Por que ninguém viu: a função **retorna na primeira linha** quando
+`OTEL_EXPORTER_OTLP_ENDPOINT` está vazio, que é o caso do `go run` local e o
+de toda a suíte. Só o compose define o endpoint. `internal/infra/telemetry`
+não tinha nenhum arquivo de teste — o ramo que quebra nunca foi executado.
+
+Corrigido subindo o import para `semconv/v1.43.0`
+(`DeploymentEnvironmentName` virou `DeploymentEnvironmentNameKey.String`) e
+com `tracing_test.go` cobrindo os dois ramos. O teste foi conferido
+revertendo o import: falha com a mensagem exata acima.
+
+**A regra "não existe verde sem integração executada" tem um segundo gume:**
+rodar o binário direto não é o mesmo que rodar o compose. Configuração que só
+existe no container é caminho não testado.
+
 ## Pendências fechadas em 20/09
 
 | Item | Como foi fechado |
 |---|---|
+| Porta 2004 publicada sem autenticação (ALTO) | `ports:` removido do serviço `libreoffice`. O sidecar só é alcançável por `api` e `worker`, pela rede interna. Medido: `curl http://localhost:2004/saude` do host → conexão recusada. |
+| Conversor sem saída bloqueada (MÉDIO) | Rede `sem-saida` com `internal: true`; `api`/`worker` ficam nas duas redes. Medido de dentro do container: `1.1.1.1:53`, `8.8.8.8:443` e HTTP externo todos bloqueados. É o que impede um DOCX com referência remota de virar SSRF ou exfiltração. |
+| Conversor sem limite de concorrência e prazo (ALTO) | Semáforo de `PDFCONV_MAXIMO_SIMULTANEAS` (padrão 2) → 503 quando saturado; conversão movida para **subprocesso** `unoconvert` com `subprocess.run(timeout=)` → 504. O subprocesso foi necessário porque `UnoClient.convert` retenta 5× com 10s e Python não mata thread, só processo. Mais `mem_limit: 2g`, `cpus: 2.0`, `pids_limit: 512`. Coberto por `deploy/test_pdfconv_handler.py` (6 testes, sem container) e ligado ao CI. |
 | `config` sem `GoStringer` (regra 11) | `String()`+`GoString()` em `Config`, `Postgres`, `Storage` e `LLM`, redigindo DSN, access/secret key e chave da API. Teste `redacao_test.go` exercita `%v`, `%+v`, `%s` e `%#v` separadamente — **`%#v` vazava a credencial viva mesmo com `String()` definido**, que é exatamente o que a regra 11 descreve. Endpoint, bucket e região continuam visíveis: redigir demais torna o log inútil. |
 | Constantes SQLSTATE mortas | Removidas com o `//nolint:unused`. O raciocínio (colisão de UUID é corrupção, não caso de negócio) ficou como comentário. |
 | `api`/`worker` sem `depends_on: libreoffice` | Declarado com `condition: service_healthy`, e o sidecar ganhou `healthcheck` batendo em `/saude` (que faz RPC de verdade ao unoserver, não teste de porta). `start_period: 60s` porque subida fria do LibreOffice é lenta. Usa `python3`, já presente na imagem, em vez de instalar `curl`. |

@@ -7,8 +7,25 @@ internal/infra/pdfconv):
                     corpo ausente/vazio -> 400
                     corpo maior que TAMANHO_MAXIMO_BYTES -> 413
                     conversao falhou -> 500, corpo = texto curto, sem detalhe interno
+                    conversor saturado -> 503
+                    conversao passou do prazo -> 504
   GET  /saude        -> 200 quando uma chamada RPC de verdade ao unoserver
                         interno teve sucesso; 503 caso contrario.
+
+LIMITES DE RECURSO (ambos obrigatorios, nao otimizacao):
+
+Concorrencia. ThreadingHTTPServer cria uma thread por requisicao, sem teto.
+Cada conversao sobe uma renderizacao do LibreOffice, que come CPU e memoria:
+sem limite, N requisicoes simultaneas derrubam o container por OOM e levam
+junto as conversoes que ja estavam em andamento. Um semaforo limitado a
+MAXIMO_CONVERSOES_SIMULTANEAS transforma isso em 503, que e uma resposta.
+
+Prazo. A conversao roda como SUBPROCESSO (unoconvert) e nao mais em
+processo via UnoClient. O motivo e que UnoClient.convert chama _connect, que
+retenta 5 vezes com 10s de espera entre elas -- com o unoserver fora, a
+requisicao fica ~50s presa e nao ha como interromper a thread que a executa.
+Python nao mata thread; mata processo. subprocess.run(timeout=...) da um
+prazo de verdade, e de quebra isola um crash da conversao do processo HTTP.
 
 Por que a checagem de /saude faz uma chamada RPC de verdade e nao so testa se
 a porta 2003 esta aberta: o unoserver abre o socket XML-RPC ANTES de terminar
@@ -24,6 +41,11 @@ comando e reexecuta a chamada ate 5 vezes com 10s de espera entre elas --
 correto para um humano esperando o servidor subir, catastrófico dentro de uma
 rota de health check que precisa responder rapido e uma unica vez.
 
+O prazo do RPC de saude vai num Transport proprio, nunca em
+socket.setdefaulttimeout: o default e estado GLOBAL do processo, e duas
+checagens simultaneas se atropelariam -- a que terminasse primeiro restauraria
+None e deixaria a outra sem prazo nenhum.
+
 O watchdog do unoserver roda numa thread dedicada. Se o processo do unoserver
 morrer, a thread chama os._exit (nunca sys.exit): SystemExit levantado numa
 thread que nao e a principal so encerra AQUELA thread -- o ThreadingHTTPServer
@@ -31,10 +53,10 @@ continuaria de pe aceitando requisicao para um conversor morto. os._exit mata
 o processo inteiro de verdade, e a restart policy do compose reinicia o
 container.
 """
+import http.client
 import http.server
 import logging
 import os
-import socket
 import subprocess
 import tempfile
 import threading
@@ -45,6 +67,29 @@ PORTA_UNOSERVER = 2003
 PORTA_UNO = 2002
 TAMANHO_MAXIMO_BYTES = 64 * 1024 * 1024
 TEMPO_LIMITE_SAUDE_SEGUNDOS = 3
+
+
+def _inteiro_do_ambiente(nome: str, padrao: int) -> int:
+    try:
+        valor = int(os.environ.get(nome, padrao))
+    except ValueError:
+        return padrao
+    return valor if valor > 0 else padrao
+
+
+# Teto de conversoes simultaneas. O padrao 2 e conservador de proposito: o
+# numero util depende da CPU e da memoria dadas ao container, e errar para
+# cima devolve OOM, nao lentidao.
+MAXIMO_CONVERSOES_SIMULTANEAS = _inteiro_do_ambiente("PDFCONV_MAXIMO_SIMULTANEAS", 2)
+
+# Quanto uma requisicao espera por uma vaga antes de desistir com 503. Curto
+# porque fila longa em conversao sincrona so empurra o timeout para o cliente.
+ESPERA_POR_VAGA_SEGUNDOS = _inteiro_do_ambiente("PDFCONV_ESPERA_VAGA_SEGUNDOS", 5)
+
+# Prazo maximo de UMA conversao, aplicado matando o subprocesso.
+PRAZO_CONVERSAO_SEGUNDOS = _inteiro_do_ambiente("PDFCONV_PRAZO_SEGUNDOS", 120)
+
+vagas_de_conversao = threading.BoundedSemaphore(MAXIMO_CONVERSOES_SIMULTANEAS)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("pdfconv-handler")
@@ -68,16 +113,29 @@ def vigiar_unoserver(processo: subprocess.Popen) -> None:
     os._exit(1)  # nunca sys.exit aqui -- ver docstring do modulo
 
 
+class TransporteComPrazo(xmlrpc.client.Transport):
+    """Transport XML-RPC com prazo proprio, sem tocar estado global."""
+
+    def __init__(self, prazo_segundos: int):
+        super().__init__()
+        self._prazo = prazo_segundos
+
+    def make_connection(self, host) -> http.client.HTTPConnection:
+        conexao = super().make_connection(host)
+        conexao.timeout = self._prazo  # aplicado no connect, que ainda nao ocorreu
+        return conexao
+
+
 def unoserver_respondeu_rpc() -> bool:
-    socket.setdefaulttimeout(TEMPO_LIMITE_SAUDE_SEGUNDOS)
     try:
-        proxy = xmlrpc.client.ServerProxy(f"http://127.0.0.1:{PORTA_UNOSERVER}")
+        proxy = xmlrpc.client.ServerProxy(
+            f"http://127.0.0.1:{PORTA_UNOSERVER}",
+            transport=TransporteComPrazo(TEMPO_LIMITE_SAUDE_SEGUNDOS),
+        )
         info = proxy.info()
         return info.get("api") is not None
     except Exception:
         return False
-    finally:
-        socket.setdefaulttimeout(None)
 
 
 class ManipuladorConversor(http.server.BaseHTTPRequestHandler):
@@ -110,18 +168,48 @@ class ManipuladorConversor(http.server.BaseHTTPRequestHandler):
 
         corpo = self.rfile.read(tamanho)
 
+        # O corpo e lido ANTES de disputar a vaga: deixar bytes na conexao
+        # enquanto se espera na fila quebraria o keep-alive do HTTP/1.1 na
+        # resposta 503.
+        if not vagas_de_conversao.acquire(timeout=ESPERA_POR_VAGA_SEGUNDOS):
+            log.warning("conversor saturado: %d vagas ocupadas", MAXIMO_CONVERSOES_SIMULTANEAS)
+            self._responder(503, b"conversor ocupado")
+            return
+        try:
+            self._converter(corpo)
+        finally:
+            vagas_de_conversao.release()
+
+    def _converter(self, corpo: bytes) -> None:
         with tempfile.TemporaryDirectory() as diretorio:
             entrada = os.path.join(diretorio, "entrada.docx")
             saida = os.path.join(diretorio, "entrada.pdf")
             with open(entrada, "wb") as f:
                 f.write(corpo)
 
-            from unoserver.client import UnoClient
-
+            comando = [
+                "unoconvert",
+                "--port", str(PORTA_UNOSERVER),
+                "--convert-to", "pdf",
+                entrada,
+                saida,
+            ]
             try:
-                UnoClient(port=str(PORTA_UNOSERVER)).convert(inpath=entrada, outpath=saida)
-            except Exception as exc:
-                log.error("falha na conversao: %s", exc.__class__.__name__)
+                resultado = subprocess.run(
+                    comando,
+                    timeout=PRAZO_CONVERSAO_SEGUNDOS,
+                    capture_output=True,
+                )
+            except subprocess.TimeoutExpired:
+                # subprocess.run ja matou o processo ao estourar o prazo.
+                log.error("conversao passou do prazo de %ds", PRAZO_CONVERSAO_SEGUNDOS)
+                self._responder(504, b"conversao excedeu o prazo")
+                return
+
+            if resultado.returncode != 0:
+                # Nunca ecoar stderr para o cliente nem para o log: a saida do
+                # LibreOffice pode conter trecho do documento (regra 7).
+                log.error("unoconvert saiu com codigo %s", resultado.returncode)
                 self._responder(500, b"falha na conversao")
                 return
 
@@ -148,7 +236,10 @@ def main():
     threading.Thread(target=vigiar_unoserver, args=(processo,), daemon=True).start()
 
     servidor = http.server.ThreadingHTTPServer(("0.0.0.0", PORTA_HTTP), ManipuladorConversor)
-    log.info("sidecar pdfconv escutando em 0.0.0.0:%d", PORTA_HTTP)
+    log.info(
+        "sidecar pdfconv escutando em 0.0.0.0:%d (max %d conversoes simultaneas, prazo %ds)",
+        PORTA_HTTP, MAXIMO_CONVERSOES_SIMULTANEAS, PRAZO_CONVERSAO_SEGUNDOS,
+    )
     servidor.serve_forever()
 
 
