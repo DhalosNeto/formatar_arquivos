@@ -206,8 +206,21 @@ Medições e limites da evidência: `docs/estado-do-backend.md`.
 - `Origem` ∈ `estilo-docx` | `heuristica` | `llm` | `usuario`, case sensitive
 - 🔒 **Correção do usuário nunca é sobrescrita**: `Reclassificar` com origem automática sobre um bloco `OrigemUsuario` é **no-op sem erro** (rodar a heurística de novo é fluxo normal, não falha). Só outra correção do próprio usuário sobrescreve
 - `NovoBloco` **acumula** todos os campos reprovados num só `ErroValidacao` (papel, confianca, origem, ref_xml)
-- `TextoResumo` é truncado em **200 runas** (`ooxml.TamanhoMaximoTextoResumo`), cortado por runa e não por byte. O CDM é índice, não cópia: o texto íntegro fica no pacote, alcançável por `RefXML`
+- `TextoResumo` é truncado em **200 runas** (`ooxml.TamanhoMaximoTextoResumo`), cortado por runa e não por byte. O texto íntegro fica no pacote, alcançável por `RefXML`
+- ⚠️ O teto **não** garante CDM menor que o texto: medido no fixture real, 8411 bytes de CDM contra 6376 de texto (132%), porque os blocos são curtos. O que ele garante é que o CDM **não cresce com o tamanho do bloco** e não guarda formatação
 - `RefXML` zero é válido (primeiro bloco do corpo); negativo é recusado
+
+### Serialização — `serializacao.go`
+**keywords:** cdm_jsonb, serializar, desserializar, MarshalJSON, envelope, versao, persistir CDM
+
+- `VersaoFormatoCDM`, `Indice{Versao,Blocos}`, `NovoIndice`, `(Indice).Serializar`, `Desserializar`, `Papel.MarshalJSON`/`UnmarshalJSON`
+- `Papel` **precisa** de `MarshalJSON`: campos privados sem ele viram `{}` e o papel de todo bloco se perderia em silêncio na ida ao banco
+- Forma: `{"versao":1,"blocos":[{"papel":{"nome":"secao","nivel":2},"texto_resumo":…,"confianca":…,"origem":…,"ref_xml":…}]}`. `nivel` omitido quando zero
+- **Envelope é obrigatório**: `entity.ValidarCDM` recusa o que não começa com `{`, então array cru de blocos não persiste
+- `blocoJSON` é tipo separado de propósito — força a volta a passar por `NovoBloco`. Tags direto em `Bloco` deixariam o `encoding/json` preencher o struct e contornar a validação
+- `versao` diferente é recusada **antes** de percorrer blocos: interpretar formato desconhecido é pior que falhar
+- 🔒 Mensagens de erro são **fixas**, nunca interpolam o JSON recebido — `erroLinhaCorrompida` embute `err.Error()` no log (regra 7). Coberto por teste que reintroduz a interpolação e vê 3 casos quebrarem
+- ⚠️ `Desserializar` devolve `ErroValidacao`; quem lê do **banco** precisa reclassificar, senão linha corrompida vira HTTP 400 culpando o cliente
 
 ### Camada 2 — `AplicarHeuristica`
 

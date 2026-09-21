@@ -17,7 +17,7 @@ o contrato que o frontend consome, ver `contrato-api.md`.
 |---|---|---|
 | **F0** Fundação | esqueleto hexagonal, infra, compose, CI | ✅ concluída |
 | **F1** Ingestão e preview | upload, storage, conversão síncrona, listagem | ✅ funcional fechada; sem prontidão de produção |
-| **F2** Parser e CDM | `ooxml.Abrir`/`Salvar`, CDM, heurística | 🟡 extração, CDM e as duas camadas de classificação verdes; falta persistir o CDM e as rotas |
+| **F2** Parser e CDM | `ooxml.Abrir`/`Salvar`, CDM, heurística | 🟡 extração, CDM, as duas camadas e a serialização verdes; faltam as rotas de análise |
 | **F3** Motor de formatação | ruleset, mutadores OOXML, ABNT 14724 | ⬜ não iniciada |
 | **F4** Citações e referências | parser, ABNT 6023/10520, APA 7 | ⬜ não iniciada |
 | **F5** LLM fallback | cliente Anthropic, limiar, teto de custo | ⬜ não iniciada |
@@ -47,6 +47,24 @@ Medições fornecidas na revisão, sem repetir integrações nesta edição docu
   **não repetida** nesta revisão; existe evidência histórica separada.
 - Round-trip: **PASS, 96,4%**, executando apenas `pacote.go` e
   `pacote_test.go`; **não** é resultado do pacote OOXML inteiro.
+
+### Medição de 20/09 — serialização do CDM
+
+O CDM agora atravessa o pipeline inteiro e volta:
+`ExtrairBlocos` → camada 1 → camada 2 → `NovoIndice` → `Serializar` →
+`Desserializar`, com os 40 blocos do artigo real idênticos na volta.
+
+- `go test ./internal/domain/cdm/ -race -cover`: **PASS, 96,7%**.
+- Fronteira verificada: a saída de `Serializar` passa em `entity.ValidarCDM`.
+- `OrigemUsuario` sobrevive ao round-trip — se a origem se perdesse na ida ao
+  banco, a correção manual deixaria de ser protegida na volta.
+
+⚠️ **Número que desmente uma frase que estava na documentação:** o CDM do
+artigo real ocupa **8411 bytes contra 6376 de texto — 132%**. O teto de 200
+runas é um limite superior por bloco, não compressão: blocos curtos cabem
+inteiros e as chaves JSON somam por cima. A garantia real é que o CDM **não
+cresce com o tamanho do bloco** e não guarda formatação. A documentação foi
+corrigida; a afirmação anterior era plausível e estava errada.
 
 ### Medição de 20/09 — camada 2 (heurística estrutural)
 
@@ -111,7 +129,7 @@ global do domínio; o mínimo exigido continua 80%.
 | `job/criacao` | 100% | criação idempotente |
 | `job/consulta` | 100% | consulta autorizada |
 | `job/execucao` | 97,6% | transições do worker |
-| `cdm` | 95,5% | papel do bloco, origem da classificação, proteção da correção manual e a heurística da camada 2 |
+| `cdm` | 96,7% | papel do bloco, origem, proteção da correção manual, heurística da camada 2 e o formato persistido |
 
 **`vo.Dono` concentra as regras de autorização por dono.** Value object
 comparável com campos privados; `==` não autoriza, só `PodeAcessar(recurso)`
@@ -219,7 +237,8 @@ serviço real.**
 | — | Worker já executa o laço, mas o upload converte síncrono e não enfileira. Falta gravar o preview no documento pela porta interna; hoje o executor grava a chave no resultado do job. |
 | — | Se a finalização (`Concluir`/`Falhar`) falha, falta recuperação do job preso em `executando`; `WithoutCancel` não resolve falha de persistência. |
 | — | `InserirOuObter` requer READ COMMITTED, mas `Begin` herda o padrão da conexão. |
-| — | F2 aberta: falta **serializar** o CDM para `cdm_jsonb` (`Papel` tem campos privados, não tem `MarshalJSON`; `entity.ValidarCDM` exige objeto JSON) e expor `POST .../analisar`, `GET/PATCH .../estrutura` e `GET /v1/jobs/{id}`. |
+| — | F2 aberta: falta expor `POST .../analisar`, `GET/PATCH .../estrutura` e `GET /v1/jobs/{id}`. A serialização já existe; ninguém ainda CHAMA `DefinirCDM`. |
+| — | `Desserializar` devolve `ErroValidacao`; a reclassificação ao ler do banco (padrão `erroLinhaCorrompida`) ainda precisa ser escrita quando o repositório passar a ler o CDM. |
 | — | `ListaAutores` não é identificada por nenhuma camada determinística; depende da F5 ou de correção manual. |
 | — | Nenhuma auditoria independente de `validador`/`seguranca` rodou sobre os recortes do CDM (camadas 1 e 2). |
 | — | `backend/rulesets/` vazio: nenhum valor de norma escrito. Bloqueia a F3. |

@@ -74,9 +74,16 @@ Implementado: `Papel` é VO comparável de campos privados, `Secao(n)` válido e
 **no-op sem erro** — rodar a heurística de novo é fluxo normal, não falha.
 
 `TextoResumo` é truncado em **200 runas** (`ooxml.TamanhoMaximoTextoResumo`),
-por runa e não por byte. É o que fecha "índice, não cópia": guardar o texto
-integral de cada bloco duplicaria o documento dentro de `cdm_jsonb`, e nada se
-perde — `RefXML` aponta para o nó de origem.
+por runa e não por byte.
+
+⚠️ **O corte é um TETO, não uma garantia de compressão — medido, não
+presumido.** No artigo real do fixture o CDM sai com **8411 bytes contra 6376
+de texto (132%)**: os blocos são curtos, cabem inteiros no resumo, e as chaves
+JSON somam por cima. Onde o teto trabalha de verdade é no bloco longo — um
+parágrafo de 5000 palavras contribui as mesmas 200 runas que um de 10. O que a
+frase "índice, não cópia" significa de fato é: o CDM **não cresce com o
+tamanho do bloco** e **não guarda formatação** (runs, estilos, mídia, rels
+ficam todos no pacote). Não significa que o JSON seja menor que o texto.
 
 **Heurística de classificação** — três camadas, nesta ordem de precedência:
 estilos nomeados do DOCX → heurística estrutural → correção do usuário (que
@@ -135,10 +142,13 @@ roda extrair → camada 1 → camada 2 sobre `artigo-real-libreoffice.docx` e
 confere o papel dos 40 blocos um por um; `TestExtrairBlocosNaoAlteraOPacote`
 confere o SHA256 do pacote depois de extrair.
 
-⬜ **Falta para fechar a fase:** serializar o CDM para `cdm_jsonb` e expor as
-rotas. `Papel` tem campos privados e não tem `MarshalJSON`, e
-`entity.ValidarCDM` exige um objeto JSON — o CDM precisa de um envelope
-(`{"versao":N,"blocos":[...]}`), não de um array cru.
+✅ Serialização pronta: `cdm.Indice`, `Serializar`/`Desserializar` e o
+envelope `{"versao":1,"blocos":[...]}`. Round-trip dos 40 blocos do artigo
+real verificado, e a saída passa em `entity.ValidarCDM`.
+
+⬜ **Falta para fechar a fase:** as rotas de análise. A serialização existe,
+mas ninguém ainda chama `DefinirCDM` — é preciso um caso de uso de análise que
+rode o pipeline, persista o índice e mova o status.
 
 ### Onde costuma dar errado
 
