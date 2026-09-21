@@ -1,7 +1,6 @@
 <!-- GERADO A PARTIR DE CLAUDE.md — não edite à mão.
-     A única diferença intencional entre os dois é o diretório dos agentes
-     (.claude/agents vs .codex/agents). Mudou uma regra? Mude no CLAUDE.md e
-     regenere, senão as duas ferramentas passam a seguir regras diferentes. -->
+     Regenerar: python3 scripts/sincronizar_instrucoes.py --write
+     Somente a referência ao diretório do time é adaptada para Codex. -->
 
 # Formatador Acadêmico
 
@@ -28,12 +27,33 @@ cd frontend && npm run dev
 
 ## Arquitetura
 
+### Fontes de verdade e instruções geradas
+
+- `docs/estado-do-backend.md`: estado medido e pendências.
+- `docs/plano-backend.md`: fases e critérios vigentes do backend.
+- `docs/contrato-api.md`: comportamento público para quem desenvolve o frontend.
+- `docs/plano.md`: histórico de produto/stack, não roteiro de implementação.
+- `CLAUDE.md` e `.claude/agents/*.md` são as fontes das instruções;
+  `AGENTS.md` e `.codex/agents/*.toml` são cópias geradas. Não editar as cópias.
+  Regenerar com `python3 scripts/sincronizar_instrucoes.py --write` e verificar
+  com `python3 scripts/sincronizar_instrucoes.py --check`. Modelos/ferramentas
+  específicos do frontmatter Claude não são impostos aos agentes Codex.
+
+F1 está funcional no escopo síncrono; isso não é aprovação para produção.
+Consultar riscos abertos e diferenciar teste de componente de fluxo ponta a
+ponta. Specs legadas/vermelhas e testes em desenvolvimento não tornam a suíte
+global verde: registrar separadamente o resultado global e o do recorte.
+
 > **Procurando onde algo mora?** `docs/mapa-modulos.md` é um índice greppável por
 > módulo: `grep -i "<assunto>" docs/mapa-modulos.md` devolve o arquivo e os
 > símbolos. Use antes de varrer o repositório.
 
 
 Hexagonal. **A dependência aponta sempre para dentro.**
+
+Exceção técnica existente: o domínio usa `internal/infra/errors`, conforme a
+regra 2. Isso não autoriza imports de outros pacotes de infra no domínio;
+separar o pacote de erros exigiria um recorte próprio, não uma correção incidental.
 
 ```
 rotas ──▶ application ──▶ domain ◀── data ◀── infra
@@ -69,7 +89,8 @@ uma cópia do documento e não contém estilo.
    `NovoErroNaoAutorizado`, `NovoErroProibido`. Controlador termina com
    `rotasutil.TratarErro(ctx, resposta, err)`. Nunca engula erro.
 3. **`context.Context` é o primeiro parâmetro** de tudo que faz I/O, e é propagado.
-4. **Construtores `New*(deps...)` explícitos.** Proibido `sync.Once` global,
+4. **Construtores explícitos com dependências** (`Novo*(deps...)`, como no código).
+   Proibido `sync.Once` global,
    singleton de pacote e variável global mutável — quebram teste paralelo.
 5. **Handlers não conhecem o Echo** — assinatura sempre
    `(context.Context, rotas.Requisicao, rotas.Resposta) error`.
@@ -102,8 +123,8 @@ Teste primeiro. Quatro camadas:
   idêntica) e preservação byte a byte das partes não-alvo do ZIP.
 - **Integração** (`//go:build integration`, testcontainers) e **E2E** (Playwright).
 
-Cobertura mínima: **80% em `internal/domain/`**. Nenhum teste chama a API do
-Claude de verdade — use um fake de `ClassificadorEstrutura`.
+Cobertura mínima: **80% em `internal/domain/`**. Nenhum teste chama uma API
+externa de LLM de verdade — use um fake de `ClassificadorEstrutura`.
 
 ## Rulesets das revistas
 
@@ -122,11 +143,12 @@ nunca corrigem.
 
 ## Fases
 
-F0 fundação ✅ · F1 ingestão e preview · F2 parser e CDM · F3 motor de formatação ·
+F0 fundação ✅ · F1 ingestão e preview síncrono ✅ · F2 parser e CDM em andamento · F3 motor de formatação ·
 F4 citações e referências · F5 fallback de LLM · F6 tabelas/figuras e revistas
 reais · F7 auth e formatos extras.
 
-Plano completo: `docs/plano.md`.
+Plano vigente: `docs/plano-backend.md`. Estado: `docs/estado-do-backend.md`.
+Frontend: consumir `docs/contrato-api.md`; não ampliar o escopo de telas sem pedido.
 
 # Compact instructions
 

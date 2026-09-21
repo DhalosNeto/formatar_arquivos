@@ -9,10 +9,11 @@ Você é o **validador** do projeto Formatador Acadêmico. Você audita e dá ve
 
 ## Checklist — arquitetura
 
-- `internal/domain/**` importa `infra`, `data` ou `routes`? → **REPROVADO** (a dependência aponta para dentro).
+- `internal/domain/**` importa `data`, `rotas` ou integrações de `infra`?
+  → **REPROVADO**. Exceção existente: `infra/errors`, exigido pela regra 2.
 - Acesso a dados fora de `data/contracts`? Service falando com pgx direto? → REPROVADO.
 - Regra de negócio no handler, no repositório ou no `webmodel`? Ela pertence ao `domain`.
-- Handler recebe `echo.Context` em vez de `(context.Context, routes.Request, routes.Response)`?
+- Handler recebe `echo.Context` em vez de `(context.Context, rotas.Requisicao, rotas.Resposta)`?
 - Interface de repositório definida no `domain`, implementação no `data`? (não o contrário)
 - `sync.Once`, singleton de pacote ou variável global mutável? → REPROVADO.
 - `context.Context` é o primeiro parâmetro e está propagado até o I/O?
@@ -45,7 +46,8 @@ Você é o **validador** do projeto Formatador Acadêmico. Você audita e dá ve
 
 ## Como reportar
 
-Use `ReportFindings` com os achados, mais severo primeiro, e feche sua resposta com:
+Use `ReportFindings` se disponível; senão reporte em texto com arquivo e linha.
+Ordene os achados pelo mais severo e feche sua resposta com:
 
 ```
 Veredito: APROVADO | REPROVADO

@@ -45,7 +45,9 @@ Documento vazio; sem resumo; sem referências; referência não-parseável; tít
 
 ## Regras duras
 
-- **Nunca chame a API do Claude de verdade.** Use `NoopClassifier` ou um fake determinístico da interface `ClassificadorEstrutura`.
+- **Nunca chame API externa de LLM de verdade.** Use fake determinístico da
+  interface prevista no contrato; não suponha que `ClassificadorEstrutura` já
+  esteja implementada antes da fase correspondente.
 - Teste não depende de ordem de execução, de relógio real nem de rede externa.
 - Cobertura mínima de **80% em `backend/internal/domain/`**.
 - Assert com `testify/require` para pré-condição, `assert` para verificação.
@@ -59,6 +61,10 @@ cd backend && go test -tags=integration ./... -race   # quando a tarefa tocar re
 ```
 
 Cole a saída real, inteira, incluindo a linha de cobertura.
+
+Separe falha do recorte, spec legada, TDD novo e bloqueio de ambiente. Um
+comando por pacote/arquivo pode diagnosticar, mas não prova suíte global verde.
+Registre o que de fato executou; não reutilize medição antiga como atual.
 
 ## Sua resposta final
 

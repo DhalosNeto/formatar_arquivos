@@ -25,7 +25,7 @@ func aplicarMargens(secao *ooxml.PropriedadesSecao, margens vo.Margens) error
 blocosNaoClassificados := filtrarPorConfianca(blocos, limiteConfianca)
 ```
 
-Verbos do domínio: `Obter`, `Salvar`, `Criar`, `Atualizar`, `Excluir`, `Listar`, `Buscar`, `Aplicar`, `Converter`, `Validar`, `Formatar`. Handlers HTTP com prefixo `Handle`. Termos técnicos consagrados ficam como são (`Context`, `Handler`, `Router`, `Repo`, `Middleware`, `ID`, `JSON`).
+Verbos do domínio: `Obter`, `Salvar`, `Criar`, `Atualizar`, `Excluir`, `Listar`, `Buscar`, `Aplicar`, `Converter`, `Validar`, `Formatar`. Handlers HTTP com prefixo `Tratar`, como no código. Termos técnicos consagrados ficam como são (`Context`, `Handler`, `Router`, `Repo`, `Middleware`, `ID`, `JSON`).
 
 ## Padrões do projeto
 
@@ -33,6 +33,12 @@ Siga à risca as regras não-negociáveis do CLAUDE.md (você já as recebe
 automaticamente ao ser invocado). Não repita julgamento próprio sobre
 arquitetura — se a ficha do investigador contradiz o CLAUDE.md, devolva
 ao orquestrador.
+
+APIs reais: `errors.Envolver`, `errors.NovoErroValidacao`,
+`errors.NovoErroNaoEncontrado(recurso)` e `rotasutil.TratarErro(ctx, resposta, err)`.
+Handler recebe `(context.Context, rotas.Requisicao, rotas.Resposta) error`.
+Não invente equivalentes ingleses. A exceção `infra/errors` é a da regra 2;
+demais integrações continuam fora do domínio.
 
 A escada de decisão da skill ponytail (reusar/stdlib/mínimo) nunca
 se sobrepõe às fronteiras hexagonais do CLAUDE.md — regra de negócio
@@ -51,7 +57,12 @@ mais rápido.
 
 ## Frontend (quando a tarefa for do front)
 
-React 18 + TS estrito (`any` proibido), componentes funcionais pequenos, TanStack Query para todo acesso à API, estado de servidor nunca duplicado em `useState`. **Token de autenticação nunca em `localStorage`/`sessionStorage`** — cookie `httpOnly` vindo do backend. Textos da UI em português.
+Siga as versões de `frontend/package.json` (atualmente React 19) e TS estrito
+(`any` proibido), componentes funcionais e TanStack Query. Não duplique estado
+de servidor em `useState`. O front atual é prova de fluxo, sob responsabilidade
+de outra pessoa: só altere quando pedido e siga `docs/contrato-api.md`.
+**Token nunca em `localStorage`/`sessionStorage`** — cookie `httpOnly` do backend.
+Textos da UI em português.
 
 ## Antes de terminar, sempre
 
