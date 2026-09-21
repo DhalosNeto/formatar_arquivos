@@ -4,8 +4,9 @@
 respeito ao backend.
 
 Este plano cobre **só o backend**. O frontend é responsabilidade de outra
-pessoa e consome `contrato-api.md`. F0 e F1 estão fechadas — ver
-`estado-do-backend.md`.
+pessoa e consome `contrato-api.md`. F0 e F1 estão funcionalmente fechadas;
+F1 entrega upload e preview síncronos, **não prontidão de produção**. Ver
+evidências e pendências atuais em `estado-do-backend.md`.
 
 Cada fase abaixo diz: **o que entra**, **o que a API passa a expor**, **critério
 de pronto** e **onde costuma dar errado**.
@@ -26,8 +27,9 @@ Estas não se negociam por pressa, e estão no `CLAUDE.md`:
    responder 400 e culpar o cliente por uma falha do servidor.
 5. **Nomes em português**; acesso a dados só por `data/contracts`; handler nunca
    conhece o Echo.
-6. Cobertura mínima de **80% em `internal/domain/`**. Hoje nenhum pacote está
-   abaixo de 95% — não deixe a fase nova puxar a média para baixo.
+6. Cobertura mínima de **80% em `internal/domain/`**. Na revisão de 20/09,
+   `documento/processamento` tem 93,8%; coberturas dos recortes aprovados não
+   tornam verde a suíte global, ainda bloqueada por legado e testes WIP.
 7. Toda decisão que contraria este plano vira um **ADR** em `docs/adr/`.
 
 ---
@@ -36,13 +38,26 @@ Estas não se negociam por pressa, e estão no `CLAUDE.md`:
 
 O risco técnico real do projeto mora aqui.
 
+**Estado atual:** ✅ round-trip byte a byte, ✅ extração de blocos
+(`ooxml.ExtrairBlocos`), ✅ entidade do CDM (`domain/cdm`) e ✅ camada 1 da
+classificação (`ooxml.ClassificarPorEstiloDocx`) — pacotes verdes com `-race`,
+92,3% e 92,9%. ⬜ Heurística estrutural, persistência do CDM, os endpoints
+abaixo e a ligação do upload à fila continuam pendentes.
+
 ### O que entra
 
 **`internal/infra/ooxml`** — abrir e salvar o pacote DOCX.
 
-`Abrir(r)` desserializa as partes que interessam (`document.xml`, `styles.xml`,
-`numbering.xml`, `settings.xml`, `_rels`) e **guarda as demais como bytes
-crus**. `Salvar(w)` reescreve o ZIP preservando intacto o que não foi tocado.
+`Abrir(io.ReaderAt, int64)` valida a estrutura mínima e `Salvar(io.Writer)`
+recopia entradas sem descomprimir, via `zip.Writer.Copy` — **a escrita
+continua sem desserializar XML**.
+
+`(*Documento).ExtrairBlocos()` devolve os `BlocoBruto` de nível superior do
+corpo (`w:p` e `w:tbl`, na ordem, com `Indice` ordinal). Ela parseia
+`word/document.xml` num **caminho paralelo e somente leitura**: reabre a
+entrada do ZIP e nunca toca o que `Salvar` recopia. A decisão está travada por
+teste — `TestExtrairBlocosNaoAlteraOPacote` compara o SHA256 do pacote depois
+de extrair. Parsear para ler não pode virar parsear para escrever.
 
 **`internal/domain/cdm`** — o Modelo Canônico. Índice semântico **por cima** do
 pacote, não uma cópia: `Bloco{Papel, TextoResumo, Confianca, Origem, RefXML}`,
@@ -53,9 +68,37 @@ cada parágrafo é; o `ooxml.Documento` é *onde* mexer.
 Citacao, ItemLista, Tabela, Figura, Legenda, Equacao, Referencia, NotaRodape.
 `Origem` ∈ `estilo-docx` | `heuristica` | `llm` | `usuario`.
 
+Implementado: `Papel` é VO comparável de campos privados, `Secao(n)` válido em
+1..6, `NovoBloco` acumula todos os campos reprovados num só `ErroValidacao`, e
+`Reclassificar` trata tentativa automática sobre bloco `OrigemUsuario` como
+**no-op sem erro** — rodar a heurística de novo é fluxo normal, não falha.
+
+`TextoResumo` é truncado em **200 runas** (`ooxml.TamanhoMaximoTextoResumo`),
+por runa e não por byte. É o que fecha "índice, não cópia": guardar o texto
+integral de cada bloco duplicaria o documento dentro de `cdm_jsonb`, e nada se
+perde — `RefXML` aponta para o nó de origem.
+
 **Heurística de classificação** — três camadas, nesta ordem de precedência:
 estilos nomeados do DOCX → heurística estrutural → correção do usuário (que
 sempre vence). A camada LLM entra só na F5.
+
+✅ Camada 1 pronta: `ClassificarPorEstiloDocx` mapeia `Title` → Titulo,
+`HeadingN` → `Secao(N)` (só 1..6; fora da faixa cai no fallback, senão
+produziria um bloco que o domínio recusa), `Normal` e `w:tbl` → Paragrafo e
+Tabela. Estilo desconhecido ou ausente vira Paragrafo com **confiança baixa**,
+que é o sinal para a camada 2 — não um erro.
+
+✅ Camada 2 pronta: `cdm.AplicarHeuristica` — rótulo de região
+(`RESUMO`/`ABSTRACT`, `REFERÊNCIAS`/`REFERENCES`), palavras-chave por prefixo,
+legenda (`Tabela N`/`Fonte:`) e seção numerada (`2.1 ` → `Secao(2)`). Mora no
+domínio: opera sobre `[]cdm.Bloco`, sem tocar infra.
+
+Ela só reclassifica quando o papel **difere** do atual — concordar com a camada
+1 não pode trocar `OrigemEstiloDocx`/0,95 por `OrigemHeuristica`/0,8.
+
+⚠️ `ListaAutores` continua sem camada determinística, de propósito: nenhuma
+evidência textual separa um nome de autor de um parágrafo comum. É caso da F5
+ou da correção manual.
 
 **Ligar o upload à fila.** Hoje a conversão é síncrona e a fila está ociosa.
 Com a análise entrando no fluxo, o trabalho assíncrono passa a valer a pena.
@@ -65,6 +108,10 @@ Com a análise entrando no fluxo, o trabalho assíncrono passa a valer a pena.
 `AtualizarStatus` e `DefinirCDM`; `DefinirChavePreviewPDF` exige `vo.Dono`, e o
 domínio deliberadamente **não** tem "dono de sistema". Criar essa capacidade é
 decisão de arquitetura — merece ADR antes da implementação.
+
+O `cmd/worker` já liga e executa o laço; não falta esse bootstrap. Além do
+registro do preview no documento, falta recuperação de jobs que permanecem
+`executando` quando `Concluir`/`Falhar` não consegue persistir a finalização.
 
 ### O que a API passa a expor
 
@@ -82,6 +129,16 @@ reclassificação posterior.
 
 O sistema identifica título, resumo, palavras-chave, seções e referências num
 artigo real — e **o round-trip não perde nada**.
+
+✅ **Medido**, não presumido: `TestAplicarHeuristicaFixtureRealIdentificaEstruturaDoArtigo`
+roda extrair → camada 1 → camada 2 sobre `artigo-real-libreoffice.docx` e
+confere o papel dos 40 blocos um por um; `TestExtrairBlocosNaoAlteraOPacote`
+confere o SHA256 do pacote depois de extrair.
+
+⬜ **Falta para fechar a fase:** serializar o CDM para `cdm_jsonb` e expor as
+rotas. `Papel` tem campos privados e não tem `MarshalJSON`, e
+`entity.ValidarCDM` exige um objeto JSON — o CDM precisa de um envelope
+(`{"versao":N,"blocos":[...]}`), não de um array cru.
 
 ### Onde costuma dar errado
 
@@ -228,8 +285,9 @@ teto.
 
 Teto de custo tem que ser verificado **antes** da chamada, não depois.
 
-Conteúdo do usuário sai da máquina aqui — é o único ponto do sistema em que isso
-acontece. Trate o recorte enviado como decisão de privacidade, não de custo.
+Esta fase prevê envio de conteúdo do usuário ao provedor LLM. Trate o recorte
+enviado como decisão de privacidade, não de custo. Isso não elimina o risco
+atual de saída de rede do conversor, registrado em `estado-do-backend.md`.
 
 ---
 

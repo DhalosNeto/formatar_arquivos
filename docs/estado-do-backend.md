@@ -1,6 +1,6 @@
 # Estado do backend — resumo executivo
 
-**Atualizado:** 2026-09-20 · **Commit:** `c30d18d`
+**Atualizado:** 2026-09-20 · Revisão do código e medições de 20/09, incluindo WIP local
 
 Este arquivo responde a duas perguntas: **em que pé está cada fase** e **o que
 já existe de verdade**. Para o plano do que falta, ver `plano-backend.md`. Para
@@ -16,8 +16,8 @@ o contrato que o frontend consome, ver `contrato-api.md`.
 | Fase | Escopo (backend) | Estado |
 |---|---|---|
 | **F0** Fundação | esqueleto hexagonal, infra, compose, CI | ✅ concluída |
-| **F1** Ingestão e preview | upload, storage, conversão, fila, listagem | ✅ concluída |
-| **F2** Parser e CDM | `ooxml.Abrir`/`Salvar`, CDM, heurística | 🟡 round-trip pronto |
+| **F1** Ingestão e preview | upload, storage, conversão síncrona, listagem | ✅ funcional fechada; sem prontidão de produção |
+| **F2** Parser e CDM | `ooxml.Abrir`/`Salvar`, CDM, heurística | 🟡 extração, CDM e as duas camadas de classificação verdes; falta persistir o CDM e as rotas |
 | **F3** Motor de formatação | ruleset, mutadores OOXML, ABNT 14724 | ⬜ não iniciada |
 | **F4** Citações e referências | parser, ABNT 6023/10520, APA 7 | ⬜ não iniciada |
 | **F5** LLM fallback | cliente Anthropic, limiar, teto de custo | ⬜ não iniciada |
@@ -34,48 +34,107 @@ encanamento necessário e invisível.
 
 ## O que existe hoje
 
-### Números
+### Evidência da revisão de 20/09
 
-```
-produção     ~5.000 linhas Go
-testes      ~12.300 linhas      (2,5 linhas de teste por linha de código)
-             233 testes unitários
-              30 testes de integração (PostgreSQL, MinIO e LibreOffice reais)
-```
+Medições fornecidas na revisão, sem repetir integrações nesta edição documental:
 
-Cobertura do domínio, contra o mínimo de 80% do `CLAUDE.md`: **nenhum pacote
-abaixo de 95%**.
+- `go build ./...`: **PASS**. `go test ./...` e `go vet ./...` globais:
+  **FAIL**, por `job/service` legado e os testes WIP de CDM/OOXML.
+- Frontend: **33 testes PASS**, typecheck e lint **PASS**.
+- Integrações: Postgres **PASS (6,927 s)**, storage **PASS (12,806 s)**,
+  fila **PASS (6,825 s)** e migrations **PASS (10,480 s)**.
+- `pdfconv` unitário: **PASS, 94,2%**. Conversão contra o sidecar real
+  **não repetida** nesta revisão; existe evidência histórica separada.
+- Round-trip: **PASS, 96,4%**, executando apenas `pacote.go` e
+  `pacote_test.go`; **não** é resultado do pacote OOXML inteiro.
+
+### Medição de 20/09 — camada 2 (heurística estrutural)
+
+O critério de pronto da F2 — "identifica título, resumo, palavras-chave, seções
+e referências num artigo real" — está **medido**, não presumido:
+`TestAplicarHeuristicaFixtureRealIdentificaEstruturaDoArtigo` roda o pipeline
+inteiro (extrair → camada 1 → camada 2) sobre `artigo-real-libreoffice.docx` e
+confere o papel dos **40 blocos, um por um**. PASS.
+
+- `go test ./internal/domain/cdm/ -race -cover`: **PASS, 95,5%**.
+- `go test ./internal/infra/ooxml/ -race -cover`: **PASS, 92,3%**.
+- Todo `internal/domain/` verde, acima do mínimo de 80%, exceto `job/service`
+  (spec legada, ver pendências) — é a **única** falha da suíte global.
+
+As cinco regras da camada 2, todas por evidência textual ou posicional:
+rótulo de região (`RESUMO`/`ABSTRACT` e `REFERÊNCIAS`/`REFERENCIAS`/
+`REFERENCES`), palavras-chave por prefixo, legenda (`Tabela N`/`Figura N`/
+`Quadro N`/`Fonte:`), seção numerada (`2.1 ` → `Secao(2)`).
+
+⚠️ **O que a camada 2 deliberadamente NÃO faz:** identificar `ListaAutores`.
+Nenhuma evidência textual confiável separa "Maria Eduarda Nogueira Prado" de um
+parágrafo comum. Os blocos 1 a 5 do fixture (título em inglês, autores,
+afiliações) ficam como `Paragrafo` com confiança baixa, que é o sinal correto
+para a camada de LLM (F5) ou para a correção manual do usuário. Inventar uma
+regra posicional ali produziria classificação errada com cara de certa.
+
+**Concordância não enfraquece o bloco.** A camada 2 só reclassifica quando o
+papel resultante difere do que o bloco já tem. Um `Heading1` com texto
+`1 INTRODUÇÃO` bate nas duas camadas; reescrevê-lo trocaria `OrigemEstiloDocx`
+/0,95 por `OrigemHeuristica`/0,8 — duas evidências independentes concordando
+sairiam valendo menos que uma sozinha. No fixture real isso atingiria seis
+cabeçalhos. Travado por teste.
+
+### Medição de 20/09 — CDM e extração de blocos
+
+Os testes que estavam RED passaram a verde com a implementação:
+
+- `go test ./internal/infra/ooxml/ -race -cover`: **PASS, 92,3%** (pacote
+  inteiro, não mais o recorte de `pacote.go`).
+- `go test ./internal/domain/cdm/ -race -cover`: **PASS, 92,9%**.
+- `go build ./...`: **PASS**. `gofmt -l .`: limpo.
+- `go vet ./...` global: continua **FAIL** por `internal/domain/job/service`,
+  spec legada RED — é a única falha restante, e não tem relação com a F2.
+- Integrações **não repetidas** nesta edição; a regra "não existe verde sem
+  integração executada" segue valendo para o que toca serviço real. A extração
+  de blocos não fala com serviço externo: roda contra fixture em disco.
+
+**F2 não está fechada.** O que entrou foi a camada 1 (estilos nomeados do
+DOCX); heurística estrutural, persistência do CDM e as rotas de análise
+continuam pendentes. As coberturas são por pacote medido, não uma aprovação
+global do domínio; o mínimo exigido continua 80%.
 
 ### Camada de domínio — `internal/domain/`
 
 | Pacote | Cobertura | O que resolve |
 |---|---|---|
-| `vo` | 100% | `Dono`, `ChaveStorage`, `FormatoArquivo` |
+| `vo` | 98,4% | `Dono`, `ChaveStorage`, `FormatoArquivo` |
 | `documento/entity` | 98,3% | entidade, status e transições |
 | `documento/service` | 95,3% | ingestão, consulta e listagem autorizadas |
-| `documento/processamento` | 96,8% | transições do worker, com compare-and-set |
+| `documento/processamento` | 93,8% | transições do worker, com compare-and-set |
 | `job/entity` | 100% | job, tipo e status |
 | `job/criacao` | 100% | criação idempotente |
 | `job/consulta` | 100% | consulta autorizada |
 | `job/execucao` | 97,6% | transições do worker |
+| `cdm` | 95,5% | papel do bloco, origem da classificação, proteção da correção manual e a heurística da camada 2 |
 
-**`vo.Dono` torna IDOR impossível por construção.** Value object comparável com
-campos privados; `==` não autoriza, só `PodeAcessar(recurso)` autoriza. Toda
-operação recebe o solicitante, e o filtro acontece **no WHERE do SQL** — nunca
-busca-e-compara, que viraria canal lateral de tempo.
+**`vo.Dono` concentra as regras de autorização por dono.** Value object
+comparável com campos privados; `==` não autoriza, só `PodeAcessar(recurso)`
+autoriza. As operações públicas recebem o solicitante e filtram o dono
+**no WHERE do SQL**. Inexistente e terceiro usam o mesmo erro público. Esses
+controles reduzem o risco de IDOR, mas não provam sua impossibilidade nem
+latência constante. As portas internas do worker têm outra fronteira de acesso.
 
 ### Persistência — `internal/data/`
 
 `contracts.GerenciadorDados` é a fachada única de acesso a dados; só
-`internal/data` pode importar `pgx`, e há teste de arquitetura garantindo isso.
+`internal/data` pode importar `pgx` diretamente, conforme teste de arquitetura.
+A fronteira HTTP → processamento interno é outra checagem: usa `go list -deps`
+para cobrir também dependências transitivas.
 
-Quatro portas separadas por caso de uso: `DocumentoRepo`/`DocumentoInternoRepo`,
+Portas separadas por caso de uso: `DocumentoRepo`/`DocumentoInternoRepo`,
 `ConsultaJobRepo`, `CriacaoJobRepo`, `ExecucaoJobRepo` e `ReivindicacaoJobRepo`.
 
 **`InserirOuObter` é idempotente e reautoriza na mesma transação:** `FOR SHARE`
 na linha do documento, `ON CONFLICT DO NOTHING RETURNING`, releitura quando não
 retorna linha. ⚠️ Depende de **READ COMMITTED** — sob REPEATABLE READ a releitura
-não enxerga a linha concorrente e a idempotência vira erro.
+não enxerga a linha concorrente e a idempotência vira erro. O código usa
+`pool.Begin(ctx)`, que herda o isolamento padrão; não fixa READ COMMITTED.
 
 Migrations goose `00001`–`00003`, com testes de integração que tiram snapshot do
 schema e verificam Up/Down/Up.
@@ -86,14 +145,17 @@ schema e verificam Up/Down/Up.
   validade (padrão 15 min, máximo 1 h). `Salvar` usa `manager.Uploader` porque
   corpo vindo da rede não é seekable e o SigV4 precisa rebobinar.
 - **`pdfconv`** — cliente do sidecar de conversão. Contrato HTTP próprio, corpo
-  cru **sem multipart**: sem multipart não existe filename no protocolo, então
-  vazamento de nome de arquivo do usuário vira impossível pela forma do wire.
+  cru **sem multipart**, sem campo de nome original no protocolo. A regra de
+  não registrar conteúdo do documento continua necessária.
 - **`fila`** — laço de consumo com `FOR UPDATE SKIP LOCKED` sobre a tabela
   `jobs`. Sem River; ver `adr/0002-fila-sem-river.md`.
 - **`ooxml`** — abre e salva o pacote DOCX com round-trip **byte a byte**
-  (SHA256 idêntico). Nesta fase nada é desserializado: `zip.Writer.Copy` recopia
-  cada entrada sem descomprimir. A desserialização entra na F3, quando a mutação
-  precisar dela.
+  (SHA256 idêntico nos fixtures testados). A **escrita** não
+  desserializa: `zip.Writer.Copy` recopia cada entrada sem descomprimir.
+  `ExtrairBlocos` parseia `word/document.xml` num caminho **paralelo e somente
+  leitura**, reabrindo a entrada do ZIP — o round-trip continua byte a byte
+  depois de extrair, e há teste travando isso. `ClassificarPorEstiloDocx` é a
+  camada 1 do CDM (Title/HeadingN/Normal → papel do bloco).
 - `config`, `errors`, `log`, `telemetry` — desde a F0.
 
 ### Sidecar de conversão
@@ -101,6 +163,10 @@ schema e verificam Up/Down/Up.
 Imagem própria (`deploy/Dockerfile.libreoffice`, 551 MB): Debian 13 + LibreOffice
 headless + `unoserver`, com handler HTTP nosso. Decidiu-se não usar imagem de
 terceiro pouco auditada para processar documento de usuário.
+
+O compose já constrói essa imagem e publica `2004:2004` para HTTP; a porta
+2003 de XML-RPC é interna ao sidecar. Isso fecha a ligação funcional, não os
+controles necessários à produção descritos abaixo.
 
 ### HTTP — `internal/rotas/`
 
@@ -147,13 +213,31 @@ serviço real.**
 
 | Severidade | Item |
 |---|---|
-| MÉDIO | Sidecar de conversão tem saída para a internet — DOCX malicioso pode buscar imagem remota e exfiltrar. Exige rede `internal: true` também em `api` e `worker`. |
-| BAIXO | `config.Storage` sem `GoStringer` (regra 11 do `CLAUDE.md`) |
-| BAIXO | Constantes SQLSTATE mortas em `data/postgres/conexao.go:22` |
-| — | `api`/`worker` sem `depends_on: libreoffice` no compose |
-| — | `internal/domain/job/service` é spec legada **vermelha de propósito**, superada por `job/criacao` + `job/consulta` + `job/execucao`. Decidir entre apagar ou implementar o que sobrou. |
-| — | A fila está construída e **ociosa**: nada enfileira jobs, o upload converte síncrono. Ver F2 no `plano-backend.md`. |
+| ALTO | Porta 2004 do conversor publicada sem autenticação: chamada direta contorna a validação do VO na API. Achado de revisão estática; não liberado para exposição pública. |
+| ALTO | Conversor sem limite explícito de concorrência, prazo de processamento e recursos. Limites de tamanho e timeout do cliente não estabelecem esses controles no sidecar. |
+| ALTO | Porta 2004 publicada no host: quem alcança o host contorna a validação de formato que a API faz antes de converter. O `healthcheck` acrescentado **não** é um controle de acesso. |
+| MÉDIO | Sidecar de conversão tem saída para a internet — risco conhecido de busca remota e exfiltração por DOCX malicioso. Isolamento de rede segue pendente. |
+| — | Compose usa `http://minio:9000` também nas URLs assinadas: risco de host inacessível ao browser, inferido do código; não validado por E2E nesta revisão. |
+| — | `internal/domain/job/service` é spec legada RED, superada por `job/criacao` + `job/consulta` + `job/execucao`; mantém a suíte global vermelha. Não implica decisão de implementar a API antiga. |
+| — | Worker já executa o laço, mas o upload converte síncrono e não enfileira. Falta gravar o preview no documento pela porta interna; hoje o executor grava a chave no resultado do job. |
+| — | Se a finalização (`Concluir`/`Falhar`) falha, falta recuperação do job preso em `executando`; `WithoutCancel` não resolve falha de persistência. |
+| — | `InserirOuObter` requer READ COMMITTED, mas `Begin` herda o padrão da conexão. |
+| — | F2 aberta: falta **serializar** o CDM para `cdm_jsonb` (`Papel` tem campos privados, não tem `MarshalJSON`; `entity.ValidarCDM` exige objeto JSON) e expor `POST .../analisar`, `GET/PATCH .../estrutura` e `GET /v1/jobs/{id}`. |
+| — | `ListaAutores` não é identificada por nenhuma camada determinística; depende da F5 ou de correção manual. |
+| — | Nenhuma auditoria independente de `validador`/`seguranca` rodou sobre os recortes do CDM (camadas 1 e 2). |
 | — | `backend/rulesets/` vazio: nenhum valor de norma escrito. Bloqueia a F3. |
+
+---
+
+## Pendências fechadas em 20/09
+
+| Item | Como foi fechado |
+|---|---|
+| `config` sem `GoStringer` (regra 11) | `String()`+`GoString()` em `Config`, `Postgres`, `Storage` e `LLM`, redigindo DSN, access/secret key e chave da API. Teste `redacao_test.go` exercita `%v`, `%+v`, `%s` e `%#v` separadamente — **`%#v` vazava a credencial viva mesmo com `String()` definido**, que é exatamente o que a regra 11 descreve. Endpoint, bucket e região continuam visíveis: redigir demais torna o log inútil. |
+| Constantes SQLSTATE mortas | Removidas com o `//nolint:unused`. O raciocínio (colisão de UUID é corrupção, não caso de negócio) ficou como comentário. |
+| `api`/`worker` sem `depends_on: libreoffice` | Declarado com `condition: service_healthy`, e o sidecar ganhou `healthcheck` batendo em `/saude` (que faz RPC de verdade ao unoserver, não teste de porta). `start_period: 60s` porque subida fria do LibreOffice é lenta. Usa `python3`, já presente na imagem, em vez de instalar `curl`. |
+
+**Não verificado por `make up`** nesta edição: o healthcheck é revisão estática do compose, validada só por parsing do YAML.
 
 ---
 
@@ -162,9 +246,9 @@ serviço real.**
 `frontend/` tem upload com arrastar, preview em `<iframe>` e listagem da sessão
 — 33 testes verdes, sem dependência além de React, TanStack Query e Tailwind.
 
-**Foi construído como prova de que o backend funciona ponta a ponta, não como
-produto.** As quatro telas do plano original (lista, estrutura detectada,
-catálogo de revistas, resultado lado a lado) não existem.
+**Foi construído como prova do fluxo funcional, não como produto nem evidência
+de prontidão de produção.** Há listagem da sessão; estrutura detectada,
+catálogo de revistas e resultado lado a lado continuam pendentes.
 
 Para quem assumir o front, o que importa é `contrato-api.md`. O código atual
 serve de referência de como consumir a API — em especial a sessão por cookie e

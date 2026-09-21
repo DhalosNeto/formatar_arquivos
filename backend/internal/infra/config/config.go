@@ -3,6 +3,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"strconv"
 	"strings"
@@ -169,3 +170,47 @@ func duracao(chave string, padrao time.Duration) time.Duration {
 	}
 	return valor
 }
+
+// valorOmitido substitui todo segredo nas representações textuais abaixo.
+const valorOmitido = "[omitido]"
+
+// As representações textuais existem para cumprir a regra 11 do CLAUDE.md:
+// campo privado não protege log, e `%#v` não passa pelo Stringer. Sem
+// GoStringer, um `slog.Any("config", cfg)` ou um `fmt.Sprintf("%#v", cfg)`
+// num handler de pânico imprimiria a senha do Postgres, a secret key do S3 e
+// a chave da API do LLM — credenciais vivas, não só privacidade.
+//
+// O que não é segredo continua visível: endpoint, bucket e região são o que
+// torna o dump útil para diagnóstico.
+
+func (p Postgres) String() string {
+	return fmt.Sprintf("config.Postgres{DSN:%s MaxConexoes:%d TempoLimiteConexao:%s}",
+		valorOmitido, p.MaxConexoes, p.TempoLimiteConexao)
+}
+
+// GoString cobre o verbo %#v, que ignora o Stringer.
+func (p Postgres) GoString() string { return p.String() }
+
+func (s Storage) String() string {
+	return fmt.Sprintf("config.Storage{Endpoint:%q Bucket:%q AccessKey:%s SecretKey:%s Regiao:%q}",
+		s.Endpoint, s.Bucket, valorOmitido, valorOmitido, s.Regiao)
+}
+
+func (s Storage) GoString() string { return s.String() }
+
+func (l LLM) String() string {
+	return fmt.Sprintf("config.LLM{Habilitado:%t ChaveAPI:%s Modelo:%q LimiteConfianca:%v}",
+		l.Habilitado, valorOmitido, l.Modelo, l.LimiteConfianca)
+}
+
+func (l LLM) GoString() string { return l.String() }
+
+// String em Config também é necessária: %#v aplica o GoStringer ao operando,
+// mas não garante aplicá-lo a cada campo aninhado. Formatar o agregado aqui
+// tira essa dúvida do caminho.
+func (c Config) String() string {
+	return fmt.Sprintf("config.Config{Porta:%q Ambiente:%q NivelLog:%q Postgres:%s Storage:%s Conversor:%+v Telemetria:%+v LLM:%s}",
+		c.Porta, c.Ambiente, c.NivelLog, c.Postgres, c.Storage, c.Conversor, c.Telemetria, c.LLM)
+}
+
+func (c Config) GoString() string { return c.String() }

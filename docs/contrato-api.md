@@ -60,13 +60,13 @@ backend numa caixa preta para quem está tentando submeter um trabalho.
 | `acesso_nao_autorizado` | 401 | (reservado para a F7) |
 | `acesso_restrito` | 403 | (reservado para a F7) |
 | `recurso_nao_encontrado` | 404 | não existe **ou** é de outro dono |
-| `conflito` | 409 | transição de estado inválida |
+| `conflito` | 409 | transição de estado inválida ou documento ainda sem preview |
 | `limite_de_requisicoes_excedido` | 429 | (reservado para a F7) |
 | `erro_interno` | 500 | falha do servidor; a causa fica só no log |
 
 **404 não distingue "não existe" de "é de outra pessoa"** — propositalmente. As
-duas respostas são idênticas byte a byte, para o endpoint não virar oráculo de
-existência. Não tente inferir nada dessa diferença: ela não existe.
+duas situações usam o mesmo erro público. Isso não constitui prova de tempo
+constante nem garante igualdade de todos os cabeçalhos da resposta.
 
 ---
 
@@ -130,7 +130,9 @@ Renomear um `.txt` para `.docx` **não** passa: a validação é por conteúdo.
 Lista os documentos da sessão, mais recentes primeiro.
 
 Query string opcional: `limite` (padrão 20, máximo 100) e `deslocamento`
-(padrão 0). Valor ausente, não numérico ou negativo cai no padrão **sem erro**.
+(padrão 0). O controlador converte ausente ou não numérico em zero. O domínio
+normaliza `limite <= 0` para 20, `limite > 100` para 100 e `deslocamento < 0`
+para zero, **sem erro**.
 
 **200** — array de documentos no mesmo formato do 201. Sem cookie, devolve `[]`.
 Nunca devolve `null`.
@@ -153,14 +155,15 @@ storage (MinIO/S3), **não** para a API.
 
 Duas consequências práticas:
 
-1. A URL é de host diferente. Renderizar num `<iframe>` depende do storage
-   mandar os cabeçalhos certos — se o quadro vier em branco, o problema é CORS
-   ou `X-Frame-Options`, não a API.
+1. O host da URL precisa ser acessível ao navegador, e os cabeçalhos precisam
+   permitir a exibição. No compose, `STORAGE_ENDPOINT=http://minio:9000` também
+   é usado na assinatura: esse nome interno pode não resolver no browser.
+   É risco inferido do código, não falha reproduzida por E2E nesta revisão.
 2. Ela expira. Não guarde em cache de longa duração nem em estado persistente;
    busque de novo quando precisar.
 
-**404** se o documento não existe, é de outro dono, ou ainda não tem preview.
-Confira `tem_preview` antes de pedir.
+**404** se o documento não existe ou é de outro dono. **409** se o documento
+autorizado ainda não tem preview. Confira `tem_preview` antes de pedir.
 
 ---
 
@@ -175,7 +178,9 @@ Confira `tem_preview` antes de pedir.
 | `formatado` | artefatos prontos para download (F3) |
 | `falhou` | processamento interrompido por erro |
 
-Hoje só `recebido` e `falhou` ocorrem — os demais entram com a F2 e a F3.
+No fluxo HTTP síncrono atual, o upload bem-sucedido devolve `recebido`.
+As transições de processamento já existem no domínio, mas o upload não
+enfileira jobs; análise e formatação ainda não são expostas pela API.
 
 ---
 

@@ -26,6 +26,8 @@ services:
         condition: service_healthy
       minio:
         condition: service_healthy
+      libreoffice:
+        condition: service_healthy
     restart: unless-stopped
 
   worker:
@@ -48,6 +50,8 @@ services:
       postgres:
         condition: service_healthy
       minio:
+        condition: service_healthy
+      libreoffice:
         condition: service_healthy
     restart: unless-stopped
 
@@ -118,14 +122,32 @@ services:
   #      LibreOffice não ter saída para a internet ao processar um DOCX
   #      malicioso com OLE/imagem remota -- exige atribuir a mesma rede
   #      também a api e worker, senão eles perdem acesso ao sidecar.
-  #   2. api/worker ainda não declaram depends_on: libreoffice, então o
-  #      primeiro job depois de um `make up` frio tende a falhar.
+  #   2. a porta 2004 é publicada no host sem autenticação: quem alcança o
+  #      host contorna a validação de formato que a API faz antes de converter.
   libreoffice:
     build:
       context: ..
       dockerfile: deploy/Dockerfile.libreoffice
     ports:
       - "2004:2004"
+    # /saude faz uma chamada RPC de verdade ao unoserver, não um teste de
+    # porta aberta: o LibreOffice aceita conexão antes de conseguir converter.
+    # Por isso start_period é generoso — subida fria leva dezenas de segundos,
+    # e sem ele api e worker desistiriam antes do sidecar ficar pronto.
+    #
+    # python3 em vez de curl porque a imagem tem o interpretador (python3-uno)
+    # e não tem curl; instalar um binário só para o health check aumentaria a
+    # superfície de um container que processa documento de usuário.
+    healthcheck:
+      test:
+        - CMD
+        - python3
+        - -c
+        - "import sys, urllib.request; sys.exit(0 if urllib.request.urlopen('http://localhost:2004/saude', timeout=5).status == 200 else 1)"
+      interval: 10s
+      timeout: 10s
+      retries: 12
+      start_period: 60s
     restart: unless-stopped
 
   jaeger:

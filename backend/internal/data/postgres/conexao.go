@@ -13,16 +13,11 @@ import (
 	"github.com/daniel-halos/formatador/internal/infra/errors"
 )
 
-// Códigos de erro do Postgres (SQLSTATE) usados na tradução de exceções.
-// Ficam disponíveis para uso futuro; nenhuma query atual traduz 23505 para
-// conflito de negócio, pois colisão de UUID é sintoma de corrupção, não caso
-// de negócio esperado.
-//
-//nolint:unused // reservadas para tradução futura de SQLSTATE, ver comentário acima.
-const (
-	codigoViolacaoUnica = "23505"
-	codigoViolacaoCheck = "23514"
-)
+// Nenhuma query deste pacote traduz SQLSTATE para erro de negócio, e é
+// deliberado: colisão de UUID (23505) é sintoma de corrupção, não caso
+// esperado. Quando uma constraint virar regra de negócio de verdade, a
+// tradução nasce junto com ela — constante reservada "para depois" só
+// envelhece atrás de um //nolint.
 
 // Gerenciador é a implementação Postgres de contracts.GerenciadorDados.
 type Gerenciador struct {
