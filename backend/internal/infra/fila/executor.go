@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"log/slog"
 
 	"github.com/google/uuid"
 
@@ -53,6 +54,7 @@ type ExecutorDocumento struct {
 	documentos  *processamento.ServicoInterno
 	armazenador ArmazenadorObjetos
 	conversor   ConversorPDF
+	registrador *slog.Logger
 }
 
 // NovoExecutorDocumento monta o executor de jobs de documento.
@@ -60,6 +62,7 @@ func NovoExecutorDocumento(
 	documentos *processamento.ServicoInterno,
 	armazenador ArmazenadorObjetos,
 	conversor ConversorPDF,
+	registrador *slog.Logger,
 ) (*ExecutorDocumento, error) {
 	if documentos == nil {
 		return nil, errors.NovoErroArgumentoNulo("documentos")
@@ -70,7 +73,10 @@ func NovoExecutorDocumento(
 	if conversor == nil {
 		return nil, errors.NovoErroArgumentoNulo("conversor")
 	}
-	return &ExecutorDocumento{documentos: documentos, armazenador: armazenador, conversor: conversor}, nil
+	if registrador == nil {
+		return nil, errors.NovoErroArgumentoNulo("registrador")
+	}
+	return &ExecutorDocumento{documentos: documentos, armazenador: armazenador, conversor: conversor, registrador: registrador}, nil
 }
 
 // Executar despacha o job pelo tipo. Tipo desconhecido ou ainda não
@@ -87,10 +93,9 @@ func (e *ExecutorDocumento) Executar(ctx context.Context, job entity.Job) (json.
 
 // analisar extrai a estrutura do DOCX e grava o CDM no documento.
 //
-// Toda saída por erro passa por marcarFalha: sem isso, uma falha no meio do
-// caminho deixaria o documento parado em `analisando` PARA SEMPRE, e o
-// usuário veria um carregamento que nunca termina. É o modo de falha mais
-// provável aqui e o mais silencioso.
+// Após iniciar a análise, tenta persistir o estado de falha quando a extração
+// falha. Se a persistência também falhar, o documento pode ficar em analisando;
+// o erro retornado preserva ambas as causas.
 func (e *ExecutorDocumento) analisar(ctx context.Context, job entity.Job) (json.RawMessage, error) {
 	if _, err := e.documentos.IniciarAnalise(ctx, job.DocumentoID); err != nil {
 		// Ainda não saiu de `recebido`: não há do que marcar falha, e
@@ -100,8 +105,7 @@ func (e *ExecutorDocumento) analisar(ctx context.Context, job entity.Job) (json.
 
 	resultado, err := e.extrairCDM(ctx, job)
 	if err != nil {
-		e.marcarFalha(ctx, job.DocumentoID)
-		return nil, err
+		return nil, e.marcarFalha(ctx, job.DocumentoID, err)
 	}
 	return resultado, nil
 }
@@ -142,12 +146,12 @@ func (e *ExecutorDocumento) extrairCDM(ctx context.Context, job entity.Job) (jso
 	return resultado, nil
 }
 
-// marcarFalha devolve o documento a um estado terminal. O erro daqui é
-// deliberadamente engolido: o erro que importa é o da análise, e sobrescrevê-lo
-// pelo da marcação esconderia a causa real. Um documento que não consegue nem
-// ser marcado como falho é problema de banco, que o log do laço já registra.
-func (e *ExecutorDocumento) marcarFalha(ctx context.Context, documentoID uuid.UUID) {
-	_, _ = e.documentos.MarcarFalha(ctx, documentoID)
+func (e *ExecutorDocumento) marcarFalha(ctx context.Context, documentoID uuid.UUID, original error) error {
+	if _, err := e.documentos.MarcarFalha(ctx, documentoID); err != nil {
+		e.registrador.ErrorContext(ctx, "falha ao persistir estado de falha do documento", "documento_id", documentoID.String())
+		return errors.NovoErroPersistirFalha(original, err)
+	}
+	return original
 }
 
 // baixarOriginal lê o arquivo original do documento do storage.

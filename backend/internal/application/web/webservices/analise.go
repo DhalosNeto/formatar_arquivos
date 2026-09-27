@@ -84,24 +84,10 @@ func (s *ServicoAnalise) ObterEstrutura(ctx context.Context, dono vo.Dono, docum
 
 	indice, err := cdm.Desserializar(documento.CDM)
 	if err != nil {
-		return webmodel.EstruturaResposta{}, erroCDMCorrompido(err)
+		return webmodel.EstruturaResposta{}, cdm.ErroIndiceCorrompido(err)
 	}
 
 	return paraEstruturaResposta(indice), nil
-}
-
-// erroCDMCorrompido RECLASSIFICA a falha de desserialização.
-//
-// cdm.Desserializar devolve *errors.ErroValidacao — correto para quem envia o
-// JSON, errado para quem apenas fez um GET. errors.Envolver NÃO reclassifica:
-// o ErroValidacao sobreviveria na cadeia e TratarErro responderia 400,
-// culpando o cliente por uma linha corrompida no banco do servidor. Mesmo
-// tratamento de erroLinhaCorrompida em internal/data/postgres/documento.go.
-//
-// A mensagem de origem entra no texto porque cdm.Desserializar usa mensagens
-// FIXAS, que não ecoam o conteúdo recebido (regra 7).
-func erroCDMCorrompido(err error) error {
-	return errors.NovoErroAplicacao("cdm do documento está corrompido: " + err.Error())
 }
 
 func paraJobResposta(job jobentity.Job) webmodel.JobResposta {

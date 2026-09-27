@@ -1,5 +1,6 @@
 package entity
 
+// TipoJob é a espécie de trabalho que um job representa.
 type TipoJob string
 
 const (
@@ -8,6 +9,7 @@ const (
 	TipoFormatar          TipoJob = "formatar"
 )
 
+// Valido informa se o tipo é um dos suportados.
 func (tipo TipoJob) Valido() bool {
 	switch tipo {
 	case TipoRenderizarPreview, TipoAnalisar, TipoFormatar:
@@ -17,6 +19,8 @@ func (tipo TipoJob) Valido() bool {
 	}
 }
 
+// ExigeRuleset informa se o tipo precisa de um perfil de formatação.
+// Só formatar exige: análise e preview não escolhem norma.
 func (tipo TipoJob) ExigeRuleset() bool { return tipo == TipoFormatar }
 
 func (tipo TipoJob) String() string { return string(tipo) }

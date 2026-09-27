@@ -18,8 +18,23 @@ go build ./...                     PASS
 go vet ./...                       limpo
 go vet -tags=integration ./...     limpo
 gofmt -l .                         limpo
+golangci-lint run ./...            0 issues (conjunto estrito)
 go test ./... -race -count=1       PASS, 31 pacotes, 0 falhas
 ```
+
+**Integrações executadas de verdade em 27/09**, contra Postgres, MinIO e o
+sidecar LibreOffice reais via Podman, com `-race`:
+
+| Suíte | Resultado |
+|---|---|
+| `internal/data/postgres` | PASS, 12,234s |
+| `internal/infra/fila` | PASS, 12,655s |
+| `internal/infra/storage` | PASS, 18,688s |
+| `migrations` | PASS, 18,757s |
+| `internal/infra/pdfconv` (conversão DOCX→PDF real) | PASS, 200,170s |
+
+As cinco suítes com `//go:build integration` foram executadas; nenhuma ficou
+de fora. A `pdfconv` constrói o sidecar do Dockerfile, o que explica os 200s.
 
 | Achado | Gravidade | Como foi fechado |
 |---|---|---|
@@ -429,7 +444,6 @@ serviço real.**
 | — | `ListaAutores` não é identificada por nenhuma camada determinística; depende da F5 ou de correção manual. |
 | — | Não há auditoria independente de `validador`/`seguranca` registrada aqui para os recortes do CDM (camadas 1 e 2); esta revisão documental não a substitui. |
 | — | O **frontend está atrás da API**: não consome `POST .../analisar`, `GET/PATCH .../estrutura` nem `GET /v1/jobs/{id}`. Esperado — os endpoints são novos — mas significa que nenhum deles tem exercício por navegador. |
-| — | Integrações com Podman **não foram executadas em 27/09**: `-tags=integration` foi compilado e passou no `vet`, não rodado. A última execução real é de 22/09 (12,125s) e a do seed em 27/09 (12,369s). |
 | — | `internal/infra/errors` expõe `E(err, alvo)` como equivalente de `errors.Is`. São 13 usos em produção e o nome não comunica nada; renomear para `Is` é mecânico, mas é decisão de vocabulário do projeto. |
 | — | `backend/rulesets/` contém schema técnico, mas nenhum perfil normativo publicável. Bloqueia conformidade normativa; testes do backend usam perfis sintéticos identificados. |
 

@@ -196,6 +196,9 @@ func TestIniciarArvoreDeTransicao(t *testing.T) {
 	for _, caso := range casos {
 		t.Run(caso.nome, func(t *testing.T) {
 			original := entity.Job{ID: id, Status: caso.statusInicial, Tentativas: 2, Progresso: 40}
+			if caso.statusInicial == entity.StatusFalhou {
+				original.Erro = "Não foi possível processar o documento."
+			}
 			var statusAtualRecebido entity.StatusJob
 			var salvo entity.Job
 			escritas := 0
@@ -224,6 +227,9 @@ func TestIniciarArvoreDeTransicao(t *testing.T) {
 				assert.Equal(t, caso.statusAtualEsperado, statusAtualRecebido,
 					"CAS deve comparar contra o status realmente lido, não contra um estado intermediário")
 				assert.Equal(t, obtido, salvo)
+				if caso.statusInicial == entity.StatusFalhou {
+					assert.Empty(t, salvo.Erro, "retentativa deve persistir a limpeza do erro anterior")
+				}
 				return
 			}
 			require.Error(t, err)
@@ -275,6 +281,12 @@ func TestConcluirFalharCaminhoFeliz(t *testing.T) {
 			assert.Equal(t, 1, escritas)
 			assert.Equal(t, obtido, salvo)
 			assert.NotNil(t, obtido.FinalizadoEm)
+			if caso.operacao == "concluir" {
+				assert.Equal(t, 100, salvo.Progresso, "conclusão deve persistir progresso final de 100")
+			} else {
+				assert.Equal(t, "Não foi possível processar o documento.", salvo.Erro,
+					"falha deve persistir o motivo sanitizado")
+			}
 		})
 	}
 }
@@ -289,6 +301,7 @@ func TestConcluirFalharTransicaoInvalidaNaoEnvolve(t *testing.T) {
 		nome, operacao string
 		statusInicial  entity.StatusJob
 	}{
+		{"concluir job pendente", "concluir", entity.StatusPendente},
 		{"concluir job já concluído", "concluir", entity.StatusConcluido},
 		{"falhar job já falhou", "falhar", entity.StatusFalhou},
 		{"falhar job pendente (só executando permite falhar)", "falhar", entity.StatusPendente},

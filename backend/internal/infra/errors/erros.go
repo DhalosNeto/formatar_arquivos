@@ -10,8 +10,28 @@ import (
 	"strings"
 )
 
-// ErroEnvolvido carrega um erro original acrescido do caminho onde foi
-// envolvido e de mensagens de contexto.
+// ErroPersistirFalha mantém ambas as causas sem expor seu conteúdo na mensagem.
+type ErroPersistirFalha struct {
+	original     error
+	persistencia error
+}
+
+// NovoErroPersistirFalha representa a falha DUPLA: o processamento falhou e a
+// gravação dessa falha também falhou. Preserva as duas causas — perder a
+// original esconderia o motivo real por trás de um problema de banco.
+func NovoErroPersistirFalha(original, persistencia error) *ErroPersistirFalha {
+	return &ErroPersistirFalha{original: original, persistencia: persistencia}
+}
+
+func (e *ErroPersistirFalha) Error() string {
+	return "falha ao persistir estado de falha do documento"
+}
+
+func (e *ErroPersistirFalha) Unwrap() []error {
+	return []error{e.original, e.persistencia}
+}
+
+// ErroEnvolvido carrega um erro original acrescido do caminho e do contexto.
 type ErroEnvolvido struct {
 	original  error
 	caminho   string

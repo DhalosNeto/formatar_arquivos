@@ -12,6 +12,7 @@ import (
 	"github.com/daniel-halos/formatador/internal/infra/errors"
 )
 
+// DadosNovoJob são os dados de entrada da criação de um job.
 type DadosNovoJob struct {
 	DocumentoID       uuid.UUID
 	Tipo              entity.TipoJob
@@ -19,11 +20,13 @@ type DadosNovoJob struct {
 	ChaveIdempotencia uuid.UUID
 }
 
+// Servico atende a criação idempotente de jobs.
 type Servico struct {
 	jobs       repository.CriacaoJobRepo
 	documentos *documentoservice.Servico
 }
 
+// NovoServico monta o serviço de criação de jobs.
 func NovoServico(jobs repository.CriacaoJobRepo, documentos *documentoservice.Servico) (*Servico, error) {
 	if jobs == nil {
 		return nil, errors.NovoErroArgumentoNulo("jobs")
@@ -34,6 +37,12 @@ func NovoServico(jobs repository.CriacaoJobRepo, documentos *documentoservice.Se
 	return &Servico{jobs: jobs, documentos: documentos}, nil
 }
 
+// Criar cria o job, ou devolve o já existente para a mesma chave de
+// idempotência.
+//
+// A chave é obrigatória e vem de quem chama. Chave repetida com dados
+// DIFERENTES é conflito, não reuso — senão dois pedidos distintos se
+// confundiriam num só job silenciosamente.
 func (s *Servico) Criar(ctx context.Context, solicitante vo.Dono, dados DadosNovoJob) (entity.Job, error) {
 	if solicitante.Vazio() {
 		return entity.Job{}, errors.NovoErroValidacao("dono", "solicitante é obrigatório")

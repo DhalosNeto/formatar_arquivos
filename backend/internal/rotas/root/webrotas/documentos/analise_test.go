@@ -88,7 +88,7 @@ func controladorDeAnaliseDeTeste(t *testing.T) (*Controlador, *repositorioMemori
 	servico, err := webservices.NovoServicoDocumento(docservico, armazenadorMemoria{}, conversorMemoria{})
 	exigirSemErroDocumentos(t, err)
 	analise := analiseDeTeste(t, docservico)
-	return NovoControlador(servico, analise), repo
+	return NovoControlador(servico, analise, nil), repo
 }
 
 func inserirDocumentoDeTeste(t *testing.T, repo *repositorioMemoria, dono vo.Dono, mutar func(*entity.Documento)) entity.Documento {

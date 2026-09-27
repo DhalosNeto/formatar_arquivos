@@ -21,6 +21,7 @@ const (
 	mensagemPapelDesconhecido  = "papel desconhecido ou seção fora da faixa 1..6"
 	mensagemIndiceIlegivel     = "o cdm não está num formato legível"
 	mensagemVersaoIncompativel = "o cdm está num formato de versão incompatível"
+	mensagemIndiceCorrompido   = "cdm do documento está corrompido"
 )
 
 // papelJSON é a forma persistida de um Papel. Objeto, e não string composta
@@ -78,6 +79,33 @@ type envelopeJSON struct {
 	Blocos []blocoJSON `json:"blocos"`
 }
 
+// ErroRefXMLDuplicado marca um índice com dois blocos apontando para o mesmo
+// nó do documento. É corrupção, não entrada inválida: RefXML é a posição
+// ordinal do bloco no corpo, e duas posições iguais não podem ter sido
+// produzidas por nenhum caminho válido de escrita.
+var ErroRefXMLDuplicado = errors.Novo("dois blocos referenciam o mesmo nó xml")
+
+// ErroIndiceCorrompido reclassifica uma falha de leitura do CDM para quem o
+// leu do BANCO em vez de receber do cliente.
+//
+// Desserializar devolve *ErroValidacao, que é o certo para quem manda o JSON
+// numa requisição e o ERRADO para quem só fez um GET: errors.Envolver não
+// reclassifica, então o ErroValidacao sobreviveria na cadeia e a API
+// responderia 400, culpando o cliente por uma linha corrompida do servidor.
+//
+// Existe aqui, e não replicada em cada chamador, porque já esteve em três
+// lugares com duas variantes — uma delas descartando a causa.
+//
+// A causa entra na mensagem porque as mensagens de Desserializar são FIXAS e
+// não ecoam o conteúdo recebido (regra 7). Não passe aqui um erro que cite
+// texto de documento.
+func ErroIndiceCorrompido(causa error) error {
+	if causa == nil {
+		return errors.NovoErroAplicacao(mensagemIndiceCorrompido)
+	}
+	return errors.NovoErroAplicacao(mensagemIndiceCorrompido + ": " + causa.Error())
+}
+
 // Indice é o CDM inteiro: o índice semântico de um documento, na ordem do
 // corpo. É isto que vai para documentos.cdm_jsonb.
 type Indice struct {
@@ -95,15 +123,13 @@ func (i Indice) Serializar() ([]byte, error) {
 	// Fatia vazia e não nula: `"blocos": null` obrigaria todo leitor a
 	// distinguir nulo de vazio, e um documento sem blocos classificados é
 	// uma lista vazia, não uma ausência.
+	// A conversão direta é possível porque blocoJSON tem exatamente os mesmos
+	// campos de Bloco, só com as tags JSON. Ela vale apenas nesta direção: a
+	// VOLTA continua obrigada a passar por NovoBloco, que é o que impede um
+	// bloco inválido de entrar no domínio vindo do banco.
 	blocos := make([]blocoJSON, 0, len(i.Blocos))
 	for _, bloco := range i.Blocos {
-		blocos = append(blocos, blocoJSON{
-			Papel:       bloco.Papel,
-			TextoResumo: bloco.TextoResumo,
-			Confianca:   bloco.Confianca,
-			Origem:      bloco.Origem,
-			RefXML:      bloco.RefXML,
-		})
+		blocos = append(blocos, blocoJSON(bloco))
 	}
 
 	dados, err := json.Marshal(envelopeJSON{Versao: i.Versao, Blocos: blocos})

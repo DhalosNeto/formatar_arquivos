@@ -17,6 +17,10 @@ type ServicoInterno struct {
 	repositorio repository.DocumentoInternoRepo
 }
 
+// NovoServicoInterno monta o serviço de processamento usado pelo worker.
+//
+// É a porta INTERNA: não recebe vo.Dono, porque o worker age em nome do
+// sistema. A fronteira de acesso dele é outra — ver internal/arquitetura.
 func NovoServicoInterno(repositorio repository.DocumentoInternoRepo) (*ServicoInterno, error) {
 	if repositorio == nil {
 		return nil, errors.NovoErroArgumentoNulo("repositorio")
@@ -46,14 +50,18 @@ func (s *ServicoInterno) ObterPorIDInterno(ctx context.Context, id uuid.UUID) (e
 	return s.obter(ctx, id)
 }
 
+// IniciarAnalise move o documento de recebido para analisando.
 func (s *ServicoInterno) IniciarAnalise(ctx context.Context, id uuid.UUID) (entity.Documento, error) {
 	return s.transitarStatus(ctx, id, (*entity.Documento).IniciarAnalise)
 }
 
+// MarcarFalha move o documento para falhou.
 func (s *ServicoInterno) MarcarFalha(ctx context.Context, id uuid.UUID) (entity.Documento, error) {
 	return s.transitarStatus(ctx, id, (*entity.Documento).MarcarFalha)
 }
 
+// ConcluirAnalise grava o CDM e move o documento para analisado, de forma
+// atômica e condicionada ao status anterior.
 func (s *ServicoInterno) ConcluirAnalise(ctx context.Context, id uuid.UUID, cdm json.RawMessage) (entity.Documento, error) {
 	documento, err := s.obter(ctx, id)
 	if err != nil {

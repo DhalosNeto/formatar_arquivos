@@ -5,6 +5,7 @@ package root
 import (
 	"github.com/daniel-halos/formatador/internal/rotas"
 	"github.com/daniel-halos/formatador/internal/rotas/root/webrotas/documentos"
+	"github.com/daniel-halos/formatador/internal/rotas/root/webrotas/jobs"
 	"github.com/daniel-halos/formatador/internal/rotas/root/webrotas/saude"
 )
 
@@ -15,6 +16,7 @@ const PrefixoAPI = "/v1"
 type Dependencias struct {
 	Saude                    *saude.Controlador
 	Documentos               *documentos.Controlador
+	Jobs                     *jobs.Controlador
 	TamanhoMaximoUploadBytes int64
 }
 
@@ -25,5 +27,6 @@ func Roteador(dependencias Dependencias) rotas.Roteador {
 	raiz := rotas.NovoRoteador()
 	raiz.Registrar(saude.Roteador(dependencias.Saude), "")
 	raiz.Registrar(documentos.Roteador(dependencias.Documentos, dependencias.TamanhoMaximoUploadBytes), "")
+	raiz.Registrar(jobs.Roteador(dependencias.Jobs), "")
 	return raiz
 }

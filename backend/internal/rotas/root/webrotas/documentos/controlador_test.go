@@ -14,6 +14,7 @@ import (
 	"github.com/daniel-halos/formatador/internal/application/web/webmodel"
 	"github.com/daniel-halos/formatador/internal/domain/documento/entity"
 	"github.com/daniel-halos/formatador/internal/domain/vo"
+	"github.com/daniel-halos/formatador/internal/rotas/sessao"
 )
 
 // docxValidoDocumentos monta um pacote DOCX mínimo, mas real, o bastante para
@@ -55,7 +56,7 @@ func TestTratarCriacaoSemCookieCriaSessaoEDefineCookie(t *testing.T) {
 		t.Fatalf("esperava 1 cookie definido, obteve %d", len(resposta.cookies))
 	}
 	cookie := resposta.cookies[0]
-	if cookie.Name != NomeCookieSessao {
+	if cookie.Name != sessao.NomeCookie {
 		t.Fatalf("nome do cookie divergente: %q", cookie.Name)
 	}
 	if !cookie.HttpOnly || !cookie.Secure || cookie.SameSite != http.SameSiteStrictMode || cookie.Path != "/" {

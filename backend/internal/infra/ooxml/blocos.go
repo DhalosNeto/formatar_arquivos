@@ -58,7 +58,7 @@ func (d *Documento) ExtrairBlocos() ([]BlocoBruto, error) {
 
 	for {
 		token, err := decodificador.Token()
-		if err == io.EOF {
+		if errors.E(err, io.EOF) {
 			return nil, errors.NovoErroValidacao("arquivo", "word/document.xml não tem um corpo de documento")
 		}
 		if err != nil {

@@ -5,8 +5,28 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/daniel-halos/formatador/internal/infra/errors"
 )
+
+func TestErroPersistirFalhaPreservaCausasSemExporMensagens(t *testing.T) {
+	t.Parallel()
+	original := errors.NovoErroConflito("CONTEUDO-PRIVADO-ORIGINAL")
+	persistencia := errors.NovoErroAplicacao("CONTEUDO-PRIVADO-PERSISTENCIA")
+	err := errors.NovoErroPersistirFalha(original, persistencia)
+	assert.EqualError(t, err, "falha ao persistir estado de falha do documento")
+	assert.ErrorIs(t, err, original)
+	assert.ErrorIs(t, err, persistencia)
+	var conflito *errors.ErroConflito
+	var aplicacao *errors.ErroAplicacao
+	require.ErrorAs(t, err, &conflito)
+	require.ErrorAs(t, err, &aplicacao)
+	assert.Same(t, original, conflito)
+	assert.Same(t, persistencia, aplicacao)
+	assert.Equal(t, []error{original, persistencia}, err.Unwrap())
+}
 
 func TestEnvolverDevolveNilParaErroNil(t *testing.T) {
 	if envolvido := errors.Envolver(nil, "contexto"); envolvido != nil {

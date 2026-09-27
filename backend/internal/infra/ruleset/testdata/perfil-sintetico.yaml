@@ -1,0 +1,20 @@
+slug: perfil-sintetico
+versao: 1
+nome: Perfil sintético de teste
+fonte: https://example.org/perfil
+pagina:
+  largura_cm: 20
+  altura_cm: 28
+  margens:
+    superior_cm: 2
+    inferior_cm: 2
+    esquerda_cm: 2
+    direita_cm: 2
+corpo:
+  fonte: Fonte Sintética
+  tamanho_pt: 11
+  entrelinha: 1.25
+  recuo_cm: 0
+  espaco_antes_pt: 0
+  espaco_depois_pt: 0
+  alinhamento: justificado

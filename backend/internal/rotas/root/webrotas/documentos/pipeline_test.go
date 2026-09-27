@@ -91,5 +91,5 @@ func controladorDeTeste(t *testing.T) (*Controlador, *repositorioMemoria) {
 	servico, err := webservices.NovoServicoDocumento(docservico, armazenadorMemoria{}, conversorMemoria{})
 	exigirSemErroDocumentos(t, err)
 	analise := analiseDeTeste(t, docservico)
-	return NovoControlador(servico, analise), repo
+	return NovoControlador(servico, analise, nil), repo
 }

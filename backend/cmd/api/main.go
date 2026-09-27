@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 	"time"
 
@@ -17,6 +16,7 @@ import (
 	"github.com/daniel-halos/formatador/internal/application/web/webservices"
 	"github.com/daniel-halos/formatador/internal/data/postgres"
 	documentoservice "github.com/daniel-halos/formatador/internal/domain/documento/service"
+	"github.com/daniel-halos/formatador/internal/domain/job/consulta"
 	"github.com/daniel-halos/formatador/internal/domain/job/criacao"
 	"github.com/daniel-halos/formatador/internal/infra/config"
 	"github.com/daniel-halos/formatador/internal/infra/log"
@@ -25,6 +25,7 @@ import (
 	"github.com/daniel-halos/formatador/internal/infra/telemetry"
 	"github.com/daniel-halos/formatador/internal/rotas/root"
 	"github.com/daniel-halos/formatador/internal/rotas/root/webrotas/documentos"
+	"github.com/daniel-halos/formatador/internal/rotas/root/webrotas/jobs"
 	"github.com/daniel-halos/formatador/internal/rotas/root/webrotas/saude"
 	"github.com/daniel-halos/formatador/internal/servidor"
 )
@@ -60,7 +61,7 @@ func executar() error {
 	if err != nil {
 		return err
 	}
-	defer desligar(desligarTracing)
+	defer telemetry.Encerrar(context.Background(), desligarTracing)
 
 	registradorMetricas := prometheus.NewRegistry()
 	metricas := telemetry.NovasMetricas(registradorMetricas)
@@ -81,41 +82,17 @@ func executar() error {
 		return err
 	}
 
-	servicoDominio, err := documentoservice.NovoServico(
-		gerenciador.Documentos(), documentoservice.TamanhoMaximoPadraoBytes)
-	if err != nil {
-		return err
-	}
-
-	servicoDocumento, err := webservices.NovoServicoDocumento(servicoDominio, clienteStorage, conversor)
-	if err != nil {
-		return err
-	}
-
-	servicoCriacaoJob, err := criacao.NovoServico(gerenciador.JobsCriacao(), servicoDominio)
-	if err != nil {
-		return err
-	}
-
-	servicoAnalise, err := webservices.NovoServicoAnalise(servicoDominio, servicoCriacaoJob)
+	dependencias, err := montarDependencias(gerenciador, clienteStorage, conversor)
 	if err != nil {
 		return err
 	}
 
 	servidorHTTP := servidor.Novo(servidor.Opcoes{
-		Config:      cfg,
-		Metricas:    metricas,
-		Registrador: registradorMetricas,
-		OrigensCORS: origensCORS(),
-		Dependencias: root.Dependencias{
-			Saude: saude.NovoControlador(versao, gerenciador,
-				storage.NovoVerificador(clienteStorage), pdfconv.NovoVerificador(conversor)),
-			Documentos: documentos.NovoControlador(servicoDocumento, servicoAnalise),
-			// Teto de transporte com folga sobre o teto de negócio: o
-			// multipart carrega boundary e cabeçalhos além do arquivo, então
-			// cortar no valor exato reprovaria upload legítimo no limite.
-			TamanhoMaximoUploadBytes: documentoservice.TamanhoMaximoPadraoBytes + (1 << 20),
-		},
+		Config:       cfg,
+		Metricas:     metricas,
+		Registrador:  registradorMetricas,
+		OrigensCORS:  cfg.OrigensCORS,
+		Dependencias: dependencias,
 	})
 
 	registrador.Info("api iniciando",
@@ -146,23 +123,67 @@ func encerrar(servidorHTTP *http.Server) error {
 	return servidorHTTP.Shutdown(ctx)
 }
 
-func desligar(fn telemetry.Desligar) {
-	if err := fn(context.Background()); err != nil {
-		log.De(context.Background()).Error("falha ao encerrar o tracing", "erro", err.Error())
+// montarDependencias monta a árvore de serviços e controladores da API.
+//
+// Existe separada de executar por uma razão prática: executar cuida do CICLO
+// DE VIDA do processo — configuração, sinal de desligamento, tracing, servidor
+// — e isso é o que alguém procura ao investigar uma falha de partida. Com as
+// oito construções de serviço no meio, esse ciclo ficava ilegível.
+//
+// Aqui não há decisão: é fiação. Toda escolha de comportamento mora nos
+// serviços construídos.
+func montarDependencias(
+	gerenciador *postgres.Gerenciador,
+	clienteStorage *storage.ClienteS3,
+	conversor *pdfconv.Cliente,
+) (root.Dependencias, error) {
+	servicoDominio, err := documentoservice.NovoServico(
+		gerenciador.Documentos(), documentoservice.TamanhoMaximoPadraoBytes)
+	if err != nil {
+		return root.Dependencias{}, err
 	}
-}
 
-func origensCORS() []string {
-	bruto := strings.TrimSpace(os.Getenv("CORS_ORIGENS"))
-	if bruto == "" {
-		return nil
+	servicoDocumento, err := webservices.NovoServicoDocumento(servicoDominio, clienteStorage, conversor)
+	if err != nil {
+		return root.Dependencias{}, err
 	}
 
-	var origens []string
-	for _, origem := range strings.Split(bruto, ",") {
-		if limpa := strings.TrimSpace(origem); limpa != "" {
-			origens = append(origens, limpa)
-		}
+	servicoCriacaoJob, err := criacao.NovoServico(gerenciador.JobsCriacao(), servicoDominio)
+	if err != nil {
+		return root.Dependencias{}, err
 	}
-	return origens
+
+	servicoAnalise, err := webservices.NovoServicoAnalise(servicoDominio, servicoCriacaoJob)
+	if err != nil {
+		return root.Dependencias{}, err
+	}
+
+	servicoConsultaJob, err := consulta.NovoServico(gerenciador.JobsConsulta(), servicoDominio)
+	if err != nil {
+		return root.Dependencias{}, err
+	}
+	servicoJobs, err := webservices.NovoServicoJob(servicoConsultaJob)
+	if err != nil {
+		return root.Dependencias{}, err
+	}
+
+	servicoDominioEstrutura, err := documentoservice.NovoServicoEstrutura(gerenciador.Estruturas())
+	if err != nil {
+		return root.Dependencias{}, err
+	}
+	servicoEstrutura, err := webservices.NovoServicoEstrutura(servicoDominioEstrutura)
+	if err != nil {
+		return root.Dependencias{}, err
+	}
+
+	return root.Dependencias{
+		Saude: saude.NovoControlador(versao, gerenciador,
+			storage.NovoVerificador(clienteStorage), pdfconv.NovoVerificador(conversor)),
+		Documentos: documentos.NovoControlador(servicoDocumento, servicoAnalise, servicoEstrutura),
+		Jobs:       jobs.NovoControlador(servicoJobs),
+		// Teto de transporte com folga sobre o teto de negócio: o multipart
+		// carrega boundary e cabeçalhos além do arquivo, então cortar no valor
+		// exato reprovaria upload legítimo no limite.
+		TamanhoMaximoUploadBytes: documentoservice.TamanhoMaximoPadraoBytes + (1 << 20),
+	}, nil
 }

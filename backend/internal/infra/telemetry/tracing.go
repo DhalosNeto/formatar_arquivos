@@ -12,6 +12,7 @@ import (
 	semconv "go.opentelemetry.io/otel/semconv/v1.43.0"
 
 	"github.com/daniel-halos/formatador/internal/infra/errors"
+	"github.com/daniel-halos/formatador/internal/infra/log"
 )
 
 // Desligar encerra o provedor de tracing, liberando os spans pendentes.
@@ -62,4 +63,23 @@ func IniciarTracing(ctx context.Context, endpointOTLP, nomeServico, ambiente str
 		defer cancelar()
 		return provedor.Shutdown(ctx)
 	}, nil
+}
+
+// Encerrar chama o desligamento do tracing e registra a falha em vez de
+// devolvê-la.
+//
+// Existe porque esse desligamento é sempre a última coisa a acontecer, em
+// `defer`, e nesse ponto não há a quem devolver erro: o processo está saindo e
+// o resultado da operação principal já foi decidido. Descartar em silêncio
+// esconderia perda de span; propagar sobrescreveria o erro que importa.
+//
+// Os dois binários usavam variações disto — um logava, o outro devolvia no
+// retorno final e perdia os spans quando o laço falhava.
+func Encerrar(ctx context.Context, desligar Desligar) {
+	if desligar == nil {
+		return
+	}
+	if err := desligar(ctx); err != nil {
+		log.De(ctx).Error("falha ao encerrar o tracing", "erro", err.Error())
+	}
 }

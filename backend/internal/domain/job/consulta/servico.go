@@ -12,11 +12,13 @@ import (
 	"github.com/daniel-halos/formatador/internal/infra/errors"
 )
 
+// Servico atende a consulta autorizada de jobs.
 type Servico struct {
 	jobs       repository.ConsultaJobRepo
 	documentos *documentoservice.Servico
 }
 
+// NovoServico monta o serviço de consulta de jobs.
 func NovoServico(jobs repository.ConsultaJobRepo, documentos *documentoservice.Servico) (*Servico, error) {
 	if jobs == nil {
 		return nil, errors.NovoErroArgumentoNulo("jobs")
@@ -27,6 +29,10 @@ func NovoServico(jobs repository.ConsultaJobRepo, documentos *documentoservice.S
 	return &Servico{jobs: jobs, documentos: documentos}, nil
 }
 
+// Obter devolve um job do solicitante.
+//
+// Job inexistente e job de outro dono devolvem o MESMO erro: distingui-los
+// entregaria a existência do recurso a quem sonda a API.
 func (s *Servico) Obter(ctx context.Context, solicitante vo.Dono, id uuid.UUID) (entity.Job, error) {
 	if err := validarConsulta(solicitante, id); err != nil {
 		return entity.Job{}, err
@@ -44,6 +50,7 @@ func (s *Servico) Obter(ctx context.Context, solicitante vo.Dono, id uuid.UUID) 
 	return job, nil
 }
 
+// ListarDoDocumento devolve os jobs de um documento do solicitante.
 func (s *Servico) ListarDoDocumento(ctx context.Context, solicitante vo.Dono, documentoID uuid.UUID) ([]entity.Job, error) {
 	if err := validarConsulta(solicitante, documentoID); err != nil {
 		return nil, err

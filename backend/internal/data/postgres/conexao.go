@@ -61,6 +61,12 @@ func novoPool(ctx context.Context, cfg config.Postgres) (*pgxpool.Pool, error) {
 // Documentos devolve o repositório de documentos com autorização por dono.
 func (g *Gerenciador) Documentos() contracts.DocumentoRepo { return NovoRepositorioDocumento(g.pool) }
 
+// Rulesets devolve o repositório de perfis de formatação.
+func (g *Gerenciador) Rulesets() contracts.RulesetRepo { return NovoRepositorioRuleset(g.pool) }
+
+// Estruturas devolve a porta pública de correção de estrutura por dono.
+func (g *Gerenciador) Estruturas() contracts.EstruturaRepo { return NovoRepositorioDocumento(g.pool) }
+
 // DocumentosInternos devolve o repositório de documentos sem restrição de
 // dono, usado pelo worker de processamento.
 func (g *Gerenciador) DocumentosInternos() contracts.DocumentoInternoRepo {
@@ -77,6 +83,10 @@ func (g *Gerenciador) JobsCriacao() contracts.CriacaoJobRepo { return NovoReposi
 // dono, usado pelo worker de processamento.
 func (g *Gerenciador) JobsExecucao() contracts.ExecucaoJobRepo { return NovoRepositorioJob(g.pool) }
 
+// JobsReivindicacao devolve a porta de reivindicação de trabalho da fila.
+//
+// É separada de JobsExecucao porque reivindicar é o caso de uso de quem
+// PROCURA trabalho, e executar é o de quem JÁ TEM um job em mãos.
 func (g *Gerenciador) JobsReivindicacao() contracts.ReivindicacaoJobRepo {
 	return NovoRepositorioJob(g.pool)
 }

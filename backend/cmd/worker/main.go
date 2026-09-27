@@ -51,6 +51,11 @@ func executar() error {
 	if err != nil {
 		return err
 	}
+	// defer, e não chamada no fim: o encerramento do tracing precisa acontecer
+	// em TODO caminho de saída. Fechá-lo só depois de laco.Executar perdia os
+	// spans pendentes sempre que o laço devolvia erro — exatamente o caso em
+	// que o trace é mais útil.
+	defer telemetry.Encerrar(context.Background(), desligarTracing)
 
 	gerenciador, err := postgres.NovoGerenciador(ctx, cfg.Postgres)
 	if err != nil {
@@ -73,7 +78,7 @@ func executar() error {
 		return err
 	}
 
-	executor, err := fila.NovoExecutorDocumento(documentosInternos, clienteStorage, conversor)
+	executor, err := fila.NovoExecutorDocumento(documentosInternos, clienteStorage, conversor, registrador)
 	if err != nil {
 		return err
 	}
@@ -94,6 +99,5 @@ func executar() error {
 		return err
 	}
 	registrador.Info("sinal de desligamento recebido, encerrando worker")
-
-	return desligarTracing(context.Background())
+	return nil
 }

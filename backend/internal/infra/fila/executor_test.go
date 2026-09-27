@@ -1,18 +1,5 @@
-// Este arquivo cobre internal/infra/fila.ExecutorDocumento.
-//
-// renderizar_preview já está implementado: os testes dele aqui são
-// NÃO-REGRESSÃO (ficha do investigador) e devem passar hoje, sem mudança de
-// produção.
-//
-// analisar (entity.TipoAnalisar) é RED: a ficha do investigador descreve o
-// fluxo esperado (IniciarAnalise -> armazenador.Obter -> ooxml.AnalisarEstrutura
-// -> cdm.NovoIndice -> Serializar -> ConcluirAnalise, com MarcarFalha em
-// QUALQUER etapa que falhar) mas ExecutorDocumento.Executar hoje só aceita
-// entity.TipoRenderizarPreview — todo teste de entity.TipoAnalisar abaixo
-// falha por asserção (o executor devolve "tipo de job não suportado") até o
-// codador implementar o dispatch. Nenhum símbolo novo é necessário para
-// compilar este arquivo: ExecutorDocumento, entity.TipoAnalisar,
-// processamento.ServicoInterno e repository.DocumentoInternoRepo já existem.
+// Testes de preview e análise estrutural do ExecutorDocumento, incluindo
+// preservação das causas e confidencialidade quando a marcação de falha falha.
 package fila
 
 import (
@@ -37,6 +24,7 @@ import (
 	"github.com/daniel-halos/formatador/internal/domain/job/entity"
 	"github.com/daniel-halos/formatador/internal/domain/vo"
 	infraerrors "github.com/daniel-halos/formatador/internal/infra/errors"
+	"github.com/daniel-halos/formatador/internal/infra/log"
 )
 
 // ---------------------------------------------------------------------------
@@ -104,6 +92,157 @@ func (r *repoInternoFakeExecutor) status(id uuid.UUID) documentoentity.Status {
 }
 
 var _ repository.DocumentoInternoRepo = (*repoInternoFakeExecutor)(nil)
+
+type repoFalhaExecutor struct {
+	*repoInternoFakeExecutor
+	erroMarcarFalha error
+	erroLerFalha    error
+	leituras        int
+	marcacoes       int
+}
+
+func (repositorio *repoFalhaExecutor) ObterPorIDInterno(ctx context.Context, id uuid.UUID) (documentoentity.Documento, error) {
+	repositorio.leituras++
+	if repositorio.leituras == 3 && repositorio.erroLerFalha != nil {
+		return documentoentity.Documento{}, repositorio.erroLerFalha
+	}
+	return repositorio.repoInternoFakeExecutor.ObterPorIDInterno(ctx, id)
+}
+
+func (repositorio *repoFalhaExecutor) AtualizarStatus(ctx context.Context, id uuid.UUID, statusAtual, novoStatus documentoentity.Status) error {
+	if novoStatus == documentoentity.StatusFalhou {
+		repositorio.marcacoes++
+		if repositorio.erroMarcarFalha != nil {
+			return repositorio.erroMarcarFalha
+		}
+	}
+	return repositorio.repoInternoFakeExecutor.AtualizarStatus(ctx, id, statusAtual, novoStatus)
+}
+
+func TestNovoExecutorRecusaRegistradorNulo(t *testing.T) {
+	documento := documentoDeTesteExecutor(t, documentoentity.StatusRecebido)
+	servico, err := processamento.NovoServicoInterno(novoRepoInternoFakeExecutor(documento))
+	require.NoError(t, err)
+	executor, err := NovoExecutorDocumento(servico, &armazenadorExecutorFake{}, &conversorExecutorFake{}, nil)
+	assert.Nil(t, executor)
+	var argumento *infraerrors.ErroArgumentoNulo
+	require.ErrorAs(t, err, &argumento)
+}
+
+func TestExecutarAnalisarPreservaCausasAoMarcarFalha(t *testing.T) {
+	for _, etapa := range []string{"persistência funciona", "leitura falha", "CAS falha"} {
+		t.Run(etapa, func(t *testing.T) {
+			var saida bytes.Buffer
+			registrador := log.Novo("debug", &saida)
+			falhaPersistencia := etapa != "persistência funciona"
+			documento := documentoDeTesteExecutor(t, documentoentity.StatusRecebido)
+			erroOriginal := infraerrors.NovoErroConflito("TRECHO-SIGILOSO-ORIGINAL")
+			erroPersistencia := infraerrors.NovoErroAplicacao("TRECHO-SIGILOSO-PERSISTENCIA")
+			repo := &repoFalhaExecutor{repoInternoFakeExecutor: novoRepoInternoFakeExecutor(documento)}
+			switch etapa {
+			case "CAS falha":
+				repo.erroMarcarFalha = erroPersistencia
+			case "leitura falha":
+				repo.erroLerFalha = erroPersistencia
+			}
+			servico, err := processamento.NovoServicoInterno(repo)
+			require.NoError(t, err)
+			executor, err := NovoExecutorDocumento(servico, &armazenadorExecutorFake{erroObter: erroOriginal}, &conversorExecutorFake{}, registrador)
+			require.NoError(t, err)
+
+			resultado, err := executor.Executar(context.Background(), entity.Job{DocumentoID: documento.ID, Tipo: entity.TipoAnalisar})
+
+			require.Error(t, err)
+			assert.Nil(t, resultado)
+			assert.ErrorIs(t, err, erroOriginal)
+			assert.Equal(t, 3, repo.leituras)
+			if etapa == "leitura falha" {
+				assert.Zero(t, repo.marcacoes)
+			} else {
+				assert.Equal(t, 1, repo.marcacoes)
+			}
+			var causaOriginal *infraerrors.ErroConflito
+			require.ErrorAs(t, err, &causaOriginal)
+			assert.Same(t, erroOriginal, causaOriginal)
+			if falhaPersistencia {
+				assert.ErrorIs(t, err, erroPersistencia)
+				var causaPersistencia *infraerrors.ErroAplicacao
+				require.ErrorAs(t, err, &causaPersistencia)
+				assert.Same(t, erroPersistencia, causaPersistencia)
+				var composto *infraerrors.ErroPersistirFalha
+				ok := infraerrors.Como(err, &composto)
+				require.True(t, ok)
+				require.Len(t, composto.Unwrap(), 2)
+				assert.ErrorIs(t, composto.Unwrap()[0], erroOriginal)
+				assert.ErrorIs(t, composto.Unwrap()[1], erroPersistencia)
+				assert.EqualError(t, err, "falha ao persistir estado de falha do documento")
+				assert.NotContains(t, err.Error(), erroOriginal.Error())
+				assert.NotContains(t, err.Error(), erroPersistencia.Error())
+				assert.Equal(t, documentoentity.StatusAnalisando, repo.status(documento.ID))
+				var registro map[string]any
+				require.NoError(t, json.Unmarshal(saida.Bytes(), &registro))
+				assert.Equal(t, "falha ao persistir estado de falha do documento", registro["msg"])
+				assert.Equal(t, "ERROR", registro["level"])
+			} else {
+				assert.NotErrorIs(t, err, erroPersistencia)
+				assert.Equal(t, documentoentity.StatusFalhou, repo.status(documento.ID))
+				assert.Empty(t, saida.String())
+			}
+			assert.NotContains(t, saida.String(), erroOriginal.Error())
+			assert.NotContains(t, saida.String(), erroPersistencia.Error())
+		})
+	}
+}
+
+func TestExecutarAnalisarNaoMarcaFalhaSemErroDeExtracao(t *testing.T) {
+	t.Parallel()
+	for _, nome := range []string{"sucesso", "erro ao iniciar"} {
+		t.Run(nome, func(t *testing.T) {
+			t.Parallel()
+			documento := documentoDeTesteExecutor(t, documentoentity.StatusRecebido)
+			repo := &repoFalhaExecutor{repoInternoFakeExecutor: novoRepoInternoFakeExecutor(documento)}
+			erroInicio := infraerrors.NovoErroAplicacao("banco indisponível")
+			if nome == "erro ao iniciar" {
+				repo.erroObter = erroInicio
+			}
+			servico, err := processamento.NovoServicoInterno(repo)
+			require.NoError(t, err)
+			executor, err := NovoExecutorDocumento(servico, &armazenadorExecutorFake{conteudo: montarDocxMinimoExecutor(t, "texto")}, &conversorExecutorFake{}, log.Novo("debug", io.Discard))
+			require.NoError(t, err)
+			resultado, err := executor.Executar(context.Background(), entity.Job{DocumentoID: documento.ID, Tipo: entity.TipoAnalisar})
+			assert.Zero(t, repo.marcacoes)
+			if nome == "erro ao iniciar" {
+				assert.ErrorIs(t, err, erroInicio)
+				assert.Nil(t, resultado)
+				assert.Equal(t, 1, repo.leituras)
+				assert.Equal(t, documentoentity.StatusRecebido, repo.status(documento.ID))
+			} else {
+				require.NoError(t, err)
+				assert.NotEmpty(t, resultado)
+				assert.Equal(t, 3, repo.leituras)
+				assert.Equal(t, documentoentity.StatusAnalisado, repo.status(documento.ID))
+			}
+		})
+	}
+}
+
+func TestExecutarPreviewFalhoNaoMarcaFalhaDoDocumento(t *testing.T) {
+	t.Parallel()
+	documento := documentoDeTesteExecutor(t, documentoentity.StatusRecebido)
+	repo := &repoFalhaExecutor{repoInternoFakeExecutor: novoRepoInternoFakeExecutor(documento)}
+	servico, err := processamento.NovoServicoInterno(repo)
+	require.NoError(t, err)
+	erroOriginal := infraerrors.NovoErroAplicacao("conversor indisponível")
+	executor, err := NovoExecutorDocumento(servico, &armazenadorExecutorFake{}, &conversorExecutorFake{erro: erroOriginal}, log.Novo("debug", io.Discard))
+	require.NoError(t, err)
+
+	resultado, err := executor.Executar(context.Background(), entity.Job{DocumentoID: documento.ID, Tipo: entity.TipoRenderizarPreview})
+
+	assert.Nil(t, resultado)
+	assert.ErrorIs(t, err, erroOriginal)
+	assert.Zero(t, repo.marcacoes)
+	assert.Equal(t, documentoentity.StatusRecebido, repo.status(documento.ID))
+}
 
 // chamadaSalvarExecutor registra o que armazenadorExecutorFake.Salvar recebeu.
 type chamadaSalvarExecutor struct {
@@ -233,7 +372,7 @@ func executorDeTesteExecutor(
 	t.Helper()
 	servicoInterno, err := processamento.NovoServicoInterno(repo)
 	require.NoError(t, err)
-	executor, err := NovoExecutorDocumento(servicoInterno, armazenador, conversor)
+	executor, err := NovoExecutorDocumento(servicoInterno, armazenador, conversor, log.Novo("debug", io.Discard))
 	require.NoError(t, err)
 	return executor
 }
@@ -325,9 +464,7 @@ func TestExecutarRenderizarPreviewFalhaEmCadaEtapaDevolveErro(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// analisar: RED — dispatch ainda não existe; estes testes falham por
-// asserção contra o "tipo de job não suportado" atual, não por símbolo
-// indefinido (todos os símbolos usados já existem).
+// Análise estrutural: persistência do CDM e tratamento dos caminhos de falha.
 // ---------------------------------------------------------------------------
 
 func TestExecutarAnalisarFelizGravaCDMEConcluiAnalise(t *testing.T) {

@@ -12,6 +12,7 @@ import (
 	"github.com/daniel-halos/formatador/internal/infra/errors"
 	"github.com/daniel-halos/formatador/internal/rotas"
 	"github.com/daniel-halos/formatador/internal/rotas/rotasutil"
+	"github.com/daniel-halos/formatador/internal/rotas/sessao"
 )
 
 // Caminhos atendidos por este roteador.
@@ -39,13 +40,18 @@ const campoID = "id"
 
 // Controlador atende os endpoints HTTP de documentos.
 type Controlador struct {
-	servico *webservices.ServicoDocumento
-	analise *webservices.ServicoAnalise
+	servico   *webservices.ServicoDocumento
+	analise   *webservices.ServicoAnalise
+	estrutura *webservices.ServicoEstrutura
 }
 
 // NovoControlador cria o controlador de documentos.
-func NovoControlador(servico *webservices.ServicoDocumento, analise *webservices.ServicoAnalise) *Controlador {
-	return &Controlador{servico: servico, analise: analise}
+func NovoControlador(
+	servico *webservices.ServicoDocumento,
+	analise *webservices.ServicoAnalise,
+	estrutura *webservices.ServicoEstrutura,
+) *Controlador {
+	return &Controlador{servico: servico, analise: analise, estrutura: estrutura}
 }
 
 // TratarCriacao recebe o upload multipart, garante a sessão do solicitante e
@@ -72,7 +78,7 @@ func (c *Controlador) TratarCriacao(ctx context.Context, requisicao rotas.Requis
 		return rotasutil.TratarErro(ctx, resposta, errors.NovoErroAplicacao("falha ao ler o arquivo enviado"))
 	}
 
-	dono, err := garantirSessao(requisicao, resposta)
+	dono, err := sessao.Garantir(requisicao, resposta)
 	if err != nil {
 		return rotasutil.TratarErro(ctx, resposta, err)
 	}
@@ -91,7 +97,7 @@ func (c *Controlador) TratarObtencao(ctx context.Context, requisicao rotas.Requi
 		return rotasutil.TratarErro(ctx, resposta, errors.NovoErroValidacao(campoID, mensagemIDInvalido))
 	}
 
-	dono, err := sessaoExistente(requisicao)
+	dono, err := sessao.Existente(requisicao, recursoDocumento)
 	if err != nil {
 		return rotasutil.TratarErro(ctx, resposta, err)
 	}
@@ -105,9 +111,9 @@ func (c *Controlador) TratarObtencao(ctx context.Context, requisicao rotas.Requi
 
 // TratarListagem devolve os documentos da sessão do solicitante, paginados.
 // Sem cookie de sessão é um visitante novo, não uma falha: responde 200 com
-// lista vazia em vez do 404 que sessaoExistente usa para obter/preview.
+// lista vazia em vez do 404 que sessao.Existente usa para obter/preview.
 func (c *Controlador) TratarListagem(ctx context.Context, requisicao rotas.Requisicao, resposta rotas.Resposta) error {
-	dono, ok := lerDonoDoCookie(requisicao)
+	dono, ok := sessao.Opcional(requisicao)
 	if !ok {
 		return resposta.Ok([]webmodel.DocumentoResposta{})
 	}
@@ -141,7 +147,7 @@ func (c *Controlador) TratarPreview(ctx context.Context, requisicao rotas.Requis
 		return rotasutil.TratarErro(ctx, resposta, errors.NovoErroValidacao(campoID, mensagemIDInvalido))
 	}
 
-	dono, err := sessaoExistente(requisicao)
+	dono, err := sessao.Existente(requisicao, recursoDocumento)
 	if err != nil {
 		return rotasutil.TratarErro(ctx, resposta, err)
 	}
@@ -164,7 +170,7 @@ func (c *Controlador) TratarAnalise(ctx context.Context, requisicao rotas.Requis
 		return rotasutil.TratarErro(ctx, resposta, errors.NovoErroValidacao(campoID, mensagemIDInvalido))
 	}
 
-	dono, err := sessaoExistente(requisicao)
+	dono, err := sessao.Existente(requisicao, recursoDocumento)
 	if err != nil {
 		return rotasutil.TratarErro(ctx, resposta, err)
 	}
@@ -184,7 +190,7 @@ func (c *Controlador) TratarEstrutura(ctx context.Context, requisicao rotas.Requ
 		return rotasutil.TratarErro(ctx, resposta, errors.NovoErroValidacao(campoID, mensagemIDInvalido))
 	}
 
-	dono, err := sessaoExistente(requisicao)
+	dono, err := sessao.Existente(requisicao, recursoDocumento)
 	if err != nil {
 		return rotasutil.TratarErro(ctx, resposta, err)
 	}

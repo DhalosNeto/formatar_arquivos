@@ -1,0 +1,136 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Contrato técnico de ruleset",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "slug",
+    "versao",
+    "nome",
+    "fonte",
+    "pagina",
+    "corpo"
+  ],
+  "properties": {
+    "slug": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 80,
+      "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"
+    },
+    "versao": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 2147483647
+    },
+    "nome": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "fonte": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 2048,
+      "format": "uri",
+      "pattern": "^https?://"
+    },
+    "pagina": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "largura_cm",
+        "altura_cm",
+        "margens"
+      ],
+      "properties": {
+        "largura_cm": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "altura_cm": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "margens": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "superior_cm",
+            "inferior_cm",
+            "esquerda_cm",
+            "direita_cm"
+          ],
+          "properties": {
+            "superior_cm": {
+              "type": "number",
+              "minimum": 0
+            },
+            "inferior_cm": {
+              "type": "number",
+              "minimum": 0
+            },
+            "esquerda_cm": {
+              "type": "number",
+              "minimum": 0
+            },
+            "direita_cm": {
+              "type": "number",
+              "minimum": 0
+            }
+          }
+        }
+      }
+    },
+    "corpo": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "fonte",
+        "tamanho_pt",
+        "entrelinha",
+        "recuo_cm",
+        "espaco_antes_pt",
+        "espaco_depois_pt",
+        "alinhamento"
+      ],
+      "properties": {
+        "fonte": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "tamanho_pt": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "entrelinha": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "Multiplicador de linha, convertido em unidades de 240."
+        },
+        "recuo_cm": {
+          "type": "number",
+          "minimum": 0
+        },
+        "espaco_antes_pt": {
+          "type": "number",
+          "minimum": 0
+        },
+        "espaco_depois_pt": {
+          "type": "number",
+          "minimum": 0
+        },
+        "alinhamento": {
+          "type": "string",
+          "enum": [
+            "esquerda",
+            "direita",
+            "centralizado",
+            "justificado"
+          ]
+        }
+      }
+    }
+  }
+}

@@ -17,6 +17,7 @@ type ServicoInterno struct {
 	repositorio repository.ExecucaoJobRepo
 }
 
+// NovoServicoInterno monta o serviço de finalização de jobs do worker.
 func NovoServicoInterno(repositorio repository.ExecucaoJobRepo) (*ServicoInterno, error) {
 	if repositorio == nil {
 		return nil, errors.NovoErroArgumentoNulo("repositorio")
@@ -66,6 +67,8 @@ func (s *ServicoInterno) Iniciar(ctx context.Context, id uuid.UUID) (entity.Job,
 	return job, nil
 }
 
+// Concluir finaliza o job com sucesso usando compare-and-set: zero linhas
+// afetadas é conflito, nunca sucesso silencioso.
 func (s *ServicoInterno) Concluir(ctx context.Context, id uuid.UUID, resultado json.RawMessage) (entity.Job, error) {
 	job, err := s.obter(ctx, id)
 	if err != nil {
@@ -81,6 +84,7 @@ func (s *ServicoInterno) Concluir(ctx context.Context, id uuid.UUID, resultado j
 	return job, nil
 }
 
+// Falhar finaliza o job com erro, também por compare-and-set.
 func (s *ServicoInterno) Falhar(ctx context.Context, id uuid.UUID, motivo string) (entity.Job, error) {
 	job, err := s.obter(ctx, id)
 	if err != nil {

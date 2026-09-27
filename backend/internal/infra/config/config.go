@@ -14,14 +14,17 @@ import (
 
 // Config agrupa toda a configuração da aplicação.
 type Config struct {
-	Porta      string
-	Ambiente   string
-	NivelLog   string
-	Postgres   Postgres
-	Storage    Storage
-	Conversor  Conversor
-	Telemetria Telemetria
-	LLM        LLM
+	Porta    string
+	Ambiente string
+	NivelLog string
+	// OrigensCORS são as origens liberadas no CORS. Lista vazia deixa o
+	// servidor aplicar o padrão dele.
+	OrigensCORS []string
+	Postgres    Postgres
+	Storage     Storage
+	Conversor   Conversor
+	Telemetria  Telemetria
+	LLM         LLM
 }
 
 // Postgres configura a conexão com o banco.
@@ -60,20 +63,50 @@ type LLM struct {
 	LimiteConfianca float64
 }
 
+// CarregarPostgres permite ferramentas de banco sem exigir storage ou LLM.
+func CarregarPostgres() (Postgres, error) {
+	cfg := postgresDoAmbiente()
+	if cfg.DSN == "" {
+		return Postgres{}, errors.NovoErroValidacao("POSTGRES_DSN", "obrigatório")
+	}
+	return cfg, nil
+}
+
+func postgresDoAmbiente() Postgres {
+	return Postgres{DSN: texto("POSTGRES_DSN", ""), MaxConexoes: inteiro32("POSTGRES_MAX_CONEXOES", 10), TempoLimiteConexao: duracao("POSTGRES_TEMPO_LIMITE", 5*time.Second)}
+}
+
 // AmbienteDesenvolvimento identifica o ambiente local.
 const AmbienteDesenvolvimento = "desenvolvimento"
+
+// lista lê uma variável separada por vírgula, descartando itens vazios.
+//
+// Fica aqui, e não no cmd, porque config é o único lugar do projeto que lê o
+// ambiente. Um os.Getenv solto num main significa que "de onde vem a
+// configuração" passa a ter duas respostas.
+func lista(nome string) []string {
+	bruto := strings.TrimSpace(os.Getenv(nome))
+	if bruto == "" {
+		return nil
+	}
+
+	var itens []string
+	for _, item := range strings.Split(bruto, ",") {
+		if limpo := strings.TrimSpace(item); limpo != "" {
+			itens = append(itens, limpo)
+		}
+	}
+	return itens
+}
 
 // Carregar monta a configuração a partir do ambiente e valida o que é obrigatório.
 func Carregar() (Config, error) {
 	cfg := Config{
-		Porta:    texto("PORTA", "8080"),
-		Ambiente: texto("AMBIENTE", AmbienteDesenvolvimento),
-		NivelLog: texto("NIVEL_LOG", "info"),
-		Postgres: Postgres{
-			DSN:                texto("POSTGRES_DSN", ""),
-			MaxConexoes:        inteiro32("POSTGRES_MAX_CONEXOES", 10),
-			TempoLimiteConexao: duracao("POSTGRES_TEMPO_LIMITE", 5*time.Second),
-		},
+		Porta:       texto("PORTA", "8080"),
+		Ambiente:    texto("AMBIENTE", AmbienteDesenvolvimento),
+		NivelLog:    texto("NIVEL_LOG", "info"),
+		OrigensCORS: lista("CORS_ORIGENS"),
+		Postgres:    postgresDoAmbiente(),
 		Storage: Storage{
 			Endpoint:  texto("STORAGE_ENDPOINT", "http://localhost:9000"),
 			Bucket:    texto("STORAGE_BUCKET", "documentos"),
