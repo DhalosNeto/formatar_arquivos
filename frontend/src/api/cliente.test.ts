@@ -55,3 +55,31 @@ describe('buscarNaApi', () => {
     expect(erro.codigo).toBe('erro_desconhecido')
   })
 })
+
+describe('opções do chamador não desligam o que é obrigatório', () => {
+  it('mantém credentials include mesmo se o chamador passar outro valor', async () => {
+    const espiao = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ ok: true }), { status: 200 }),
+    )
+    vi.stubGlobal('fetch', espiao)
+
+    // 'omit' não enviaria o cookie de sessão: a requisição viraria anônima e a
+    // API responderia 404 como se o documento não existisse.
+    await buscarNaApi('/documentos', { credentials: 'omit' })
+
+    expect(espiao.mock.calls[0][1].credentials).toBe('include')
+  })
+
+  it('preserva o Accept quando o chamador passa outros cabeçalhos', async () => {
+    const espiao = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ ok: true }), { status: 200 }),
+    )
+    vi.stubGlobal('fetch', espiao)
+
+    await buscarNaApi('/documentos', { headers: { 'X-Teste': '1' } })
+
+    const cabecalhos = espiao.mock.calls[0][1].headers
+    expect(cabecalhos.Accept).toBe('application/json')
+    expect(cabecalhos['X-Teste']).toBe('1')
+  })
+})

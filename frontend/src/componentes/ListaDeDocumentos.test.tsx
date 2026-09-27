@@ -79,3 +79,13 @@ describe('ListaDeDocumentos', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent(/falha ao listar documentos/i)
   })
 })
+
+it('mostra carregando em vez de "nenhum documento" enquanto a consulta não resolve', async () => {
+  // Promessa que nunca resolve: prende a consulta em isPending.
+  vi.stubGlobal('fetch', vi.fn().mockReturnValue(new Promise(() => {})))
+
+  renderizarComConsultas()
+
+  expect(await screen.findByText(/carregando seus documentos/i)).toBeInTheDocument()
+  expect(screen.queryByText(/nenhum documento enviado ainda/i)).not.toBeInTheDocument()
+})

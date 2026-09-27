@@ -27,11 +27,16 @@ interface CorpoErro {
 }
 
 export async function buscarNaApi<T>(caminho: string, opcoes: RequestInit = {}): Promise<T> {
+  // A ordem do spread importa e já esteve errada: com `...opcoes` no fim, quem
+  // passasse `headers` apagava o Accept, e quem passasse `credentials`
+  // desligava o `include` que sustenta a sessão — sem erro nenhum, só uma
+  // requisição anônima. As opções do chamador entram PRIMEIRO; o que não é
+  // negociável vem depois.
   const resposta = await fetch(`${BASE_URL}${caminho}`, {
+    ...opcoes,
     // A sessão vive em cookie httpOnly; nada de token em localStorage.
     credentials: 'include',
     headers: { Accept: 'application/json', ...opcoes.headers },
-    ...opcoes,
   })
 
   if (!resposta.ok) {

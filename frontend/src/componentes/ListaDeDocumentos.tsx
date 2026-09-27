@@ -10,6 +10,13 @@ export function ListaDeDocumentos() {
     queryFn: () => listarDocumentos(),
   })
 
+  // Carregando não é lista vazia: sem este ramo, quem TEM documentos lia
+  // "Nenhum documento enviado ainda" durante a requisição — a pior mensagem
+  // possível para quem acabou de enviar um arquivo.
+  if (consulta.isPending) {
+    return <p className="text-sm text-slate-500">Carregando seus documentos…</p>
+  }
+
   if (consulta.isError) {
     const erro = consulta.error
     return (

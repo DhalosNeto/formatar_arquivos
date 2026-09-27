@@ -11,6 +11,14 @@ export interface DocumentoEnviado {
 
 export interface RespostaPreview {
   url: string
+  /**
+   * Instante em que a URL pré-assinada deixa de valer, em ISO 8601.
+   *
+   * O backend sempre envia. Ignorá-lo era um bug silencioso: passado o prazo,
+   * o storage recusa e o <iframe> fica em branco SEM erro de consulta — a
+   * requisição à API tinha dado certo, quem negou foi o S3.
+   */
+  expira_em: string
 }
 
 export function enviarDocumento(arquivo: File): Promise<DocumentoEnviado> {
