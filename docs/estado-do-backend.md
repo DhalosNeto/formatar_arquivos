@@ -113,6 +113,45 @@ com teste que falha sem ela:
 
 Frontend ao fechar: **38 testes** (eram 33), lint estrito e `tsc` limpos.
 
+### Auditoria independente — 27/09
+
+Os commits de 27/09 foram escritos e revisados pelo mesmo agente, o que o
+`CLAUDE.md` desaconselha. `validador` e `seguranca` rodaram depois, somente
+leitura, sobre `e373525..d994107` — 76 arquivos, incluindo o trabalho F2/F3
+herdado de outra IDE que **nunca havia passado por revisão de ninguém**.
+
+```
+validador   APROVADO · 0 bloqueantes
+seguranca   APROVADO · 0 críticos · 0 altos · 0 médios · 2 baixos
+```
+
+O que eles confirmaram, verificando em vez de aceitar a afirmação: a
+consolidação da sessão não trocou a semântica de nenhum handler (mapeamento 1:1
+dos chamadores contra o comportamento antigo); a reclassificação de CDM
+corrompido está correta nos três chamadores, porque todos leem do banco e
+nenhum recebe entrada HTTP direta; os `nil` nos testes do controlador não
+alcançam caminho de produção; a ordem de inicialização em `montarDependencias`
+é idêntica à anterior; e `config.lista` replica o comportamento de lista vazia
+do antigo `origensCORS`.
+
+Foram além do que a revisão interna havia olhado: conferiram que o CAS de
+`SalvarEstrutura` compara status **e** CDM atomicamente, validaram os fatores
+de conversão de unidade numericamente, e verificaram que o 404 de IDOR é **byte
+a byte igual** entre "não existe" e "é de outro dono" — com o corpo do job
+nunca carregando o campo `resultado` interno.
+
+**Os dois achados BAIXO foram corrigidos:**
+
+| Achado | Correção |
+|---|---|
+| Assimetria de validação: `jobs` recusava `uuid.Nil`, os cinco handlers de documento não | `rotasutil.IDDaRota` unifica os seis pontos. Não era explorável — nenhuma linha tem id nulo e o WHERE filtra por dono —, mas duas validações para a mesma coisa fazem a resposta certa depender do arquivo. De quebra removeu 6 cópias do mesmo bloco |
+| `mapa-modulos.md` citava `rotas/middleware/sessao`, apagado na própria refatoração, e `ServicoJobs`, renomeado | Corrigido, e passou a haver varredura: os **42** caminhos citados no mapa existem no código |
+
+**O que os auditores não conseguiram verificar:** `golangci-lint` (o binário não
+está instalado no ambiente deles; roda via `go run`, como no `Makefile`), as
+cinco suítes de integração (exigem containers de pé) e o `sandbox` do iframe em
+navegador real. As três seguem como limitação declarada, não como aprovação.
+
 ## Organização da documentação — 27/09
 
 `docs/` tinha 17 arquivos, cinco deles artefatos de sessão que se referenciavam
@@ -442,7 +481,6 @@ serviço real.**
 | — | PATCH usa `EstruturaRepo.SalvarEstrutura` com dono e CAS do status/CDM. A comparação cobre concorrência durante a requisição; não há ETag/revisão do formulário no navegador. |
 | — | A fila reivindica apenas `pendente`; `falhou` não é selecionado novamente. `tentativas` é incrementado, mas não implementa retry automático. Política de reenfileiramento, backoff e teto de tentativas permanece pendente. |
 | — | `ListaAutores` não é identificada por nenhuma camada determinística; depende da F5 ou de correção manual. |
-| — | Não há auditoria independente de `validador`/`seguranca` registrada aqui para os recortes do CDM (camadas 1 e 2); esta revisão documental não a substitui. |
 | — | O **frontend está atrás da API**: não consome `POST .../analisar`, `GET/PATCH .../estrutura` nem `GET /v1/jobs/{id}`. Esperado — os endpoints são novos — mas significa que nenhum deles tem exercício por navegador. |
 | — | `internal/infra/errors` expõe `E(err, alvo)` como equivalente de `errors.Is`. São 13 usos em produção e o nome não comunica nada; renomear para `Is` é mecânico, mas é decisão de vocabulário do projeto. |
 | — | `backend/rulesets/` contém schema técnico, mas nenhum perfil normativo publicável. Bloqueia conformidade normativa; testes do backend usam perfis sintéticos identificados. |

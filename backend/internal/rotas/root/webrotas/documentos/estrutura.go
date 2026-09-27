@@ -11,7 +11,6 @@ import (
 	"github.com/daniel-halos/formatador/internal/rotas"
 	"github.com/daniel-halos/formatador/internal/rotas/rotasutil"
 	"github.com/daniel-halos/formatador/internal/rotas/sessao"
-	"github.com/google/uuid"
 )
 
 const tamanhoMaximoCorrecao = 4096
@@ -22,9 +21,9 @@ const tamanhoMaximoCorrecao = 4096
 // recurso, e um controlador paralelo obrigava a raiz a registrar o pacote
 // documentos duas vezes.
 func (controlador *Controlador) TratarCorrecao(ctx context.Context, requisicao rotas.Requisicao, resposta rotas.Resposta) error {
-	id, err := uuid.Parse(requisicao.Parametro(campoID))
+	id, err := rotasutil.IDDaRota(requisicao, campoID)
 	if err != nil {
-		return rotasutil.TratarErro(ctx, resposta, errors.NovoErroValidacao(campoID, mensagemIDInvalido))
+		return rotasutil.TratarErro(ctx, resposta, err)
 	}
 	dono, err := sessao.Existente(requisicao, recursoDocumento)
 	if err != nil {

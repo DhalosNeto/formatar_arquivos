@@ -5,8 +5,6 @@ import (
 	"io"
 	"strconv"
 
-	"github.com/google/uuid"
-
 	"github.com/daniel-halos/formatador/internal/application/web/webmodel"
 	"github.com/daniel-halos/formatador/internal/application/web/webservices"
 	"github.com/daniel-halos/formatador/internal/infra/errors"
@@ -33,7 +31,6 @@ const CampoArquivo = "arquivo"
 // (CLAUDE.md, regra 7).
 const (
 	mensagemArquivoObrigatorio = "o arquivo é obrigatório"
-	mensagemIDInvalido         = "identificador inválido"
 )
 
 const campoID = "id"
@@ -92,9 +89,9 @@ func (c *Controlador) TratarCriacao(ctx context.Context, requisicao rotas.Requis
 
 // TratarObtencao devolve o retrato público de um documento do próprio dono.
 func (c *Controlador) TratarObtencao(ctx context.Context, requisicao rotas.Requisicao, resposta rotas.Resposta) error {
-	id, err := uuid.Parse(requisicao.Parametro(campoID))
+	id, err := rotasutil.IDDaRota(requisicao, campoID)
 	if err != nil {
-		return rotasutil.TratarErro(ctx, resposta, errors.NovoErroValidacao(campoID, mensagemIDInvalido))
+		return rotasutil.TratarErro(ctx, resposta, err)
 	}
 
 	dono, err := sessao.Existente(requisicao, recursoDocumento)
@@ -142,9 +139,9 @@ func parametroInteiroOuPadrao(requisicao rotas.Requisicao, nome string) int {
 // TratarPreview devolve a URL pré-assinada do preview em PDF de um documento
 // do próprio dono.
 func (c *Controlador) TratarPreview(ctx context.Context, requisicao rotas.Requisicao, resposta rotas.Resposta) error {
-	id, err := uuid.Parse(requisicao.Parametro(campoID))
+	id, err := rotasutil.IDDaRota(requisicao, campoID)
 	if err != nil {
-		return rotasutil.TratarErro(ctx, resposta, errors.NovoErroValidacao(campoID, mensagemIDInvalido))
+		return rotasutil.TratarErro(ctx, resposta, err)
 	}
 
 	dono, err := sessao.Existente(requisicao, recursoDocumento)
@@ -165,9 +162,9 @@ func (c *Controlador) TratarPreview(ctx context.Context, requisicao rotas.Requis
 // não o resultado. Chamar duas vezes devolve o MESMO job — a idempotência
 // vem da chave derivada em ServicoAnalise, não de um controle aqui.
 func (c *Controlador) TratarAnalise(ctx context.Context, requisicao rotas.Requisicao, resposta rotas.Resposta) error {
-	id, err := uuid.Parse(requisicao.Parametro(campoID))
+	id, err := rotasutil.IDDaRota(requisicao, campoID)
 	if err != nil {
-		return rotasutil.TratarErro(ctx, resposta, errors.NovoErroValidacao(campoID, mensagemIDInvalido))
+		return rotasutil.TratarErro(ctx, resposta, err)
 	}
 
 	dono, err := sessao.Existente(requisicao, recursoDocumento)
@@ -185,9 +182,9 @@ func (c *Controlador) TratarAnalise(ctx context.Context, requisicao rotas.Requis
 // TratarEstrutura devolve o CDM do documento. Documento ainda sem análise é
 // conflito, não ausência — mesma postura de TratarPreview.
 func (c *Controlador) TratarEstrutura(ctx context.Context, requisicao rotas.Requisicao, resposta rotas.Resposta) error {
-	id, err := uuid.Parse(requisicao.Parametro(campoID))
+	id, err := rotasutil.IDDaRota(requisicao, campoID)
 	if err != nil {
-		return rotasutil.TratarErro(ctx, resposta, errors.NovoErroValidacao(campoID, mensagemIDInvalido))
+		return rotasutil.TratarErro(ctx, resposta, err)
 	}
 
 	dono, err := sessao.Existente(requisicao, recursoDocumento)
