@@ -25,8 +25,10 @@ cd frontend && npm run dev
 
 ### Fontes de verdade e instruções geradas
 
+- `docs/README.md`: **índice de entrada da documentação.** Comece por ele.
 - `docs/estado-do-backend.md`: estado medido e pendências.
 - `docs/plano-backend.md`: fases e critérios vigentes do backend.
+- `docs/retomada.md`: onde a última sessão parou e qual é a próxima tarefa.
 - `docs/contrato-api.md`: comportamento público para quem desenvolve o frontend.
 - `docs/plano.md`: histórico de produto/stack, não roteiro de implementação.
 - `CLAUDE.md` e `.claude/agents/*.md` são as fontes das instruções;

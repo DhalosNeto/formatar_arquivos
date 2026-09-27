@@ -13,11 +13,30 @@ está desatualizado — corrija o mapa, não invente o código.
 
 Legenda de estado: ✅ implementado com evidência no recorte · 🔴 testes RED · ⬜ pendente
 
-Revisão de 20/09/2026: F1 funcional síncrona fechada, sem prontidão de produção.
-Build PASS; test/vet globais FAIL (`job/service` legado e CDM/OOXML WIP).
-Medições e limites da evidência: `docs/estado-do-backend.md`.
+Revisão de 22/09/2026: F1 funcional síncrona; F2 com CDM, análise via fila,
+PATCH estrutura e GET jobs implementados. Suíte global com `-race` e integração
+Postgres passaram. Isso não implica prontidão de produção.
+Medições históricas e limites da evidência: `docs/estado-do-backend.md`.
 
 ---
+
+## MOD: rulesets-seed ✅
+**keywords:** ruleset, schema, YAML, seed, semear, checksum, imutabilidade, F3
+
+- `backend/internal/domain/ruleset/definicao.go` — `Definicao.Validar`: regras técnicas de página e corpo, sem valores normativos presumidos.
+- `backend/internal/infra/ruleset/carregar.go` — `Carregar`: YAML limitado, schema embutido de `backend/rulesets/_schema.json`, sem resolução externa.
+- `backend/internal/domain/ruleset/repository/ruleset.go` — `RulesetRepo.Semear`; fachada `contracts.RulesetRepo` e `GerenciadorDados.Rulesets`.
+- `backend/internal/data/postgres/ruleset.go` — `RepositorioRuleset.Semear`: lote atômico READ COMMITTED, timeout, repetição sem UPDATE, conflito por versão divergente.
+- `backend/cmd/rulesetctl/main.go` — `validar`, `semear`: diretório confinado em `os.Root`, arquivos limitados, carregamento anterior à persistência.
+- **Contrato de caminho:** `<slug>/v<versao>.yaml`, sem zeros à esquerda e coerente com os dados do arquivo. `.yml` é detectado e **recusado**. Subárvores com nome iniciado em `_` são puladas. Travessia limitada a 4096 entradas e profundidade 4; exige arquivo regular e recusa link simbólico. Diretório vazio devolve sucesso, para o CI rodar enquanto não há perfil normativo.
+- `backend/internal/infra/config/config.go` — `CarregarPostgres`: configuração de banco sem exigir storage/LLM.
+- `backend/internal/data/postgres/ruleset_integration_test.go` — integração de versões, rollback, concorrência e timeout. Medição registrada em `docs/estado-do-backend.md`.
+
+## MOD: unidades-formatacao ✅
+**keywords:** F3, twips, centimetros, pontos, meio-ponto, entrelinha, arredondamento
+
+- `backend/internal/domain/vo/unidades.go` — `CentimetrosParaTwips`, `PontosParaTwips`, `PontosParaMeiosPontos`, `EntrelinhaParaUnidades`: conversões não negativas, arredondamento e teto técnico int32. Não define valores normativos nem substitui validação contextual de OOXML.
+- `backend/internal/domain/vo/unidades_test.go` — fatores, empates, zeros, NaN/Inf, negativos e fronteiras de overflow. Testes com race e auditoria aprovados em 22/09. **Fonte normativa pendente e a ambiguidade de entrelinha da Geousp estão em `docs/plano-backend.md`, seção F3.**
 
 ## MOD: dono-autorizacao ✅
 **keywords:** Dono, IDOR, autorizacao, ownership, sessao, usuario, terceiro, PodeAcessar, solicitante
@@ -46,7 +65,7 @@ Medições e limites da evidência: `docs/estado-do-backend.md`.
 - `consulta/servico.go` — `Servico`, `Obter`, `ListarDoDocumento`
 - `execucao/servico.go` — `ServicoInterno` (**worker**, sem dono): `Iniciar`, `Concluir`, `Falhar`
 - `repository/{criacao,consulta,execucao}.go` — `CriacaoJobRepo` (`InserirOuObter`), `ConsultaJobRepo`, `ExecucaoJobRepo` (`Salvar` com CAS)
-- 🔴 `job/service/job_test.go` — **spec legada superada**, SHA `654be0fd…3e16dc`. Não apagar, não criar `JobRepo` só para compilar.
+- Histórico da **spec legada superada**, SHA `654be0fd…3e16dc`: recuperável pelo histórico do git, não duplicada em `docs/`. Quatro asserções compatíveis migradas para `job/execucao`. Não implementar `JobRepo` legado; medição global em `docs/estado-do-backend.md`.
 
 ## MOD: persistencia ✅
 **keywords:** postgres, pgx, repositorio, SQL, transacao, isolamento, InserirOuObter, contracts
@@ -89,24 +108,35 @@ Medições e limites da evidência: `docs/estado-do-backend.md`.
 - Integração real histórica: conversão DOCX→PDF contra o sidecar, `ok 247s`; não repetida na revisão de 20/09. Unitário PASS, 94,2% nessa revisão.
 - ⚠️ **execução FRIA reprova por starvation** (build do LibreOffice compete com os casos de timing de 5s). Builde a imagem ANTES de rodar a integração. Não afrouxe os timeouts.
 - Contrato é **nosso**: corpo cru, **sem multipart**, sem campo de nome original no protocolo. Isso não substitui a regra de não registrar conteúdo do documento.
-- `deploy/docker-compose.yml` constrói o sidecar próprio e publica HTTP `2004:2004`; XML-RPC 2003 é interno ao sidecar.
-- ⚠️ Porta 2004 publicada sem autenticação permite contornar a validação do VO na API; faltam limites explícitos de concorrência, prazo de processamento e recursos. Saída de rede ainda permitida.
+- `deploy/docker-compose.yml` constrói o sidecar próprio **sem publicar 2004 no host**; HTTP acessível por API/worker na rede `sem-saida` (`internal: true`). XML-RPC 2003 é interno ao sidecar.
+- Limites configurados: `PDFCONV_MAXIMO_SIMULTANEAS=2`, `PDFCONV_PRAZO_SEGUNDOS=120`, `mem_limit: 2g`, `cpus: 2.0`, `pids_limit: 512`. Contenção de processos filhos ainda tem limites; ver `docs/estado-do-backend.md`.
 - ⚠️ socket 2003 abre **antes** do LibreOffice subir → health check por porta aberta mente; use RPC real
 - ⚠️ `UnoClient._connect` = 5× `sleep=10` (~50s). Nunca no `/saude`.
 - ⚠️ watchdog precisa de `os._exit`, não `sys.exit`
 - ✅ resolvido: `ModuleNotFoundError: No module named 'uno'` vinha de pip e apt em interpretadores diferentes. `debian:trixie-slim` + `--break-system-packages` no `python3` do sistema
 
 ## MOD: fila-worker ✅
-**keywords:** River, fila, queue, worker, enfileirar, render_preview, consumo
+**keywords:** River, fila, queue, worker, enfileirar, render_preview, consumo, analisar, retry, marcarFalha
 
 - **Sem River** — ver `docs/adr/0002-fila-sem-river.md`. A fila é a própria tabela `jobs`.
 - `backend/internal/infra/fila/laco.go` — `Laco`, `NovoLaco`, `Reivindicador`, `Executor`, `Finalizador`
 - `backend/internal/infra/fila/executor.go` — `ExecutorDocumento`, `NovoExecutorDocumento`
 - `internal/domain/job/repository/reivindicacao.go` — `ReivindicacaoJobRepo`, porta separada de propósito: reivindicar é o caso de uso de quem PROCURA trabalho; executar é de quem JÁ TEM um job
-- `postgres.RepositorioJob.Reivindicar` — `FOR UPDATE SKIP LOCKED`, provado por `TestReivindicarConcorrenteNaoEntregaJobDuasVezes`
+- `postgres.RepositorioJob.Reivindicar` — `WHERE status='pendente'` + `FOR UPDATE SKIP LOCKED`, provado por `TestReivindicarConcorrenteNaoEntregaJobDuasVezes`. Não seleciona `falhou`; incrementar `tentativas` não implementa retry automático. Reenfileiramento, backoff e teto de tentativas permanecem pendentes.
 - ⚠️ desligamento usa `context.WithoutCancel`: cancelar o laço **não** pode abortar job em voo, senão a linha fica presa em `executando`
-- ⬜ **a fila está ociosa**: nada enfileira jobs, o upload converte síncrono. Ligar exige porta nova para o worker gravar `chave_storage_pdf` (não existe hoje — decisão de arquitetura)
-- ⬜ Se `Concluir`/`Falhar` não persistir, o laço apenas registra a falha: falta recuperação do job que permanece `executando`.
+- ✅ `POST .../analisar` enfileira análise; `ExecutorDocumento.analisar` chama `ooxml.AnalisarEstrutura`, serializa o CDM e persiste via `ConcluirAnalise`. `jobs.resultado` contém só a contagem de blocos.
+- ⬜ O upload mantém preview síncrono. Preview assíncrono exige porta interna para gravar `chave_storage_pdf` no documento; essa pendência não bloqueia a análise.
+- `errors.ErroPersistirFalha` preserva as duas causas quando `MarcarFalha` também falha; mensagem e log fixos, logger explícito em `NovoExecutorDocumento`. O banco pode manter o documento `analisando`; se `Concluir`/`Falhar` não persistir, o job pode ficar `executando`. Recuperação e reconciliação continuam pendentes.
+
+## MOD: sessao ✅
+**keywords:** sessao, cookie, sessao_id, dono anonimo, httpOnly, SameSite, autenticacao
+
+- `backend/internal/rotas/sessao/sessao.go` — `NomeCookie`, `Garantir`, `Existente`, `Opcional`
+- 🔒 **É o ÚNICO lugar que conhece o nome do cookie.** Antes havia duas implementações (`webrotas/documentos` e `middleware/sessao`) com duas constantes `"sessao_id"`: trocar uma e esquecer a outra derrubava metade da API sem erro de compilação
+- Três formas, e a diferença importa: `Garantir` cria sessão quando não há cookie (upload); `Existente` devolve `ErroNaoEncontrado` com o recurso do chamador (obter/preview/estrutura/job); `Opcional` devolve `false` sem erro (listagem — primeira visita não é falha)
+- Cookie ausente, não-uuid ou uuid nulo é tratado como **ausente**, nunca erro do cliente
+- Cookie gravado com httpOnly + Secure + SameSite=Strict + Path=/ (regra 9)
+- O nome do recurso vem do chamador para a mensagem não citar "sessão": um 401 distinguiria "sem sessão" de "recurso de outro dono" e viraria oráculo de existência
 
 ## MOD: http-rotas ✅
 **keywords:** rota, handler, echo, middleware, requisicao, resposta, erro HTTP, prontidao
@@ -120,6 +150,9 @@ Medições e limites da evidência: `docs/estado-do-backend.md`.
 - ✅ achado MÉDIO FECHADO: `saude/controlador.go:94` devolve `motivoIndisponivel` (mensagem fixa); causa real só no `slog`.
 - ✅ `webrotas/documentos`: `Controlador`, `Roteador`, `CaminhoColecao`/`CaminhoItem`/`CaminhoPreview`, `CampoArquivo`, `NomeCookieSessao`, `garantirSessao`, `sessaoExistente`
 - ✅ `application/web`: `webmodel.DocumentoResposta`/`PreviewResposta`, `webservices.ServicoDocumento` (portas `ArmazenadorObjetos`/`ConversorPDF`)
+- ✅ `application/web/webservices/analise.go` — `ServicoAnalise`, `NovoServicoAnalise`, `Analisar` (job idempotente por documento), `ObterEstrutura` (autorização por dono), `erroCDMCorrompido` (erro de banco vira 500, não 400).
+- ✅ `webrotas/documentos`: `CaminhoAnalise`/`CaminhoEstrutura`, `TratarAnalise`/`TratarEstrutura`; POST de análise retorna 202 e GET de estrutura devolve o CDM. DTOs: `webmodel.JobResposta`, `EstruturaResposta`, `BlocoResposta`.
+- ✅ `PATCH /v1/documentos/{id}/estrutura` e `GET /v1/jobs/{id}`. `domain/documento/service/estrutura.go` — `ServicoEstrutura.Corrigir`; `domain/documento/repository/estrutura.go` — `EstruturaRepo`; `data/postgres/estrutura.go` — `SalvarEstrutura`: dono e CAS do status/CDM. `application/web/webservices/jobs.go` — `ServicoJobs`; `rotas/root/webrotas/jobs/controlador.go` — consulta autorizada; `rotas/middleware/sessao` — sessão existente sem criação de cookie.
 - ✅ `rotas.LimitarCorpo`, `Requisicao.Cookie`, `Resposta.DefinirCookie`
 - ⚠️ **`BodyLimit` global roda ANTES do middleware de rota.** `servidor.go` isenta o upload via `Skipper` (`ehUploadDeDocumento`); sem isso o teto real da API vira 1 MB e o `LimitarCorpo` nunca é alcançado. Já foi bug.
 - ✅ `GET /v1/documentos` (`TratarListagem`): sem cookie devolve `[]` com **200**, não 404 — quem nunca enviou nada não tem sessão, e isso é normal. Não usa `sessaoExistente`.
@@ -137,13 +170,13 @@ Medições e limites da evidência: `docs/estado-do-backend.md`.
 
 - `backend/internal/infra/config/config.go` — `Config`, `Postgres`, `Storage`, `Conversor`, `Telemetria`, `LLM`, `Carregar`, `EhDesenvolvimento`, `AmbienteDesenvolvimento`
 - `infra/log/log.go`, `infra/telemetry/{metricas,tracing}.go`
-- Segredo só por env (regra 8). 💸 `config.Storage` sem `GoStringer` (regra 11, achado BAIXO).
+- Segredo só por env (regra 8). `Config`, `Postgres`, `Storage` e `LLM` têm `String()` e `GoString()` com redação de segredos; testes em `redacao_test.go`.
 
 ## MOD: fiacao-bootstrap ✅
 **keywords:** main, cmd/api, cmd/worker, wiring, fiacao, montar, Verificador, prontidao
 
-- `cmd/api/main.go` monta Postgres, storage, conversor e serviço de documentos; registra saúde e documentos, com verificadores de Postgres, storage e `pdfconv`.
-- `cmd/worker/main.go` monta gerenciador, storage, conversor, executor e finalizador; chama `fila.Laco.Executar`. O upload não enfileira jobs (ver `MOD: fila-worker`).
+- `cmd/api/main.go` monta Postgres, storage, conversor, serviço de documentos, criação de jobs e `ServicoAnalise`; registra saúde e documentos (incluindo análise/estrutura), com verificadores de Postgres, storage e `pdfconv`.
+- `cmd/worker/main.go` monta gerenciador, storage, conversor, executor e finalizador; chama `fila.Laco.Executar`. A análise enfileira jobs; o upload mantém preview síncrono (ver `MOD: fila-worker`).
 - **Provado rodando**: `/v1/prontidao` devolve 200 com tudo de pé e 503 sem vazar nada com o MinIO derrubado
 - ⚠️ Compose usa `http://minio:9000` também para assinar URLs: risco de host inacessível ao browser, inferido do código, sem teste E2E nesta revisão.
 
@@ -176,9 +209,12 @@ Medições e limites da evidência: `docs/estado-do-backend.md`.
 ## MOD: arquitetura-fronteiras ✅
 **keywords:** fronteira, hexagonal, dependencia, import proibido, camada
 
-- `backend/internal/arquitetura/fronteira_test.go` — `TestDetectorDeFronteira`, `TestHTTPNaoDependeDoProcessamentoInterno`
-- Fronteira HTTP → processamento interno: `TestHTTPNaoDependeDoProcessamentoInterno` usa `go list -deps`, incluindo dependências transitivas de API e rotas.
-- Fronteira pgx: `TestPgxSoVazDentroDeInternalData` examina `.Imports` **diretos**. API → data/postgres → pgx é uma dependência transitiva legítima.
+- `backend/internal/arquitetura/fronteira_test.go` — `TestHTTPNaoDependeDoProcessamentoInterno`, `TestPgxSoVazDentroDeInternalData`
+- `backend/internal/arquitetura/dominio_test.go` — `TestDominioNaoImportaInfra` ⭐ **a regra nº 1**
+- 🔒 **Domínio → infra:** `TestDominioNaoImportaInfra` varre `.Imports` de `./internal/domain/...` e reprova qualquer `internal/infra/*` que não seja `internal/infra/errors`, a **única** exceção autorizada. Guarda contra verificar zero pacotes por erro de filtro
+- Fronteira HTTP → processamento interno: usa `go list -deps`, incluindo dependências transitivas de API e rotas.
+- Fronteira pgx: examina `.Imports` **diretos**. API → data/postgres → pgx é uma dependência transitiva legítima.
+- Cada teste de fronteira tem um teste do PRÓPRIO DETECTOR antes dele: detector quebrado faz a fronteira passar sempre, que é a falha mais silenciosa possível.
 
 ## MOD: ooxml ✅ (round-trip + extração de blocos)
 **keywords:** ooxml, docx, XML, w:pPr, w:rPr, w:sectPr, w:body, w:tbl, w:pStyle, styles.xml, golden, extrair blocos, namespace
@@ -194,14 +230,14 @@ Medições e limites da evidência: `docs/estado-do-backend.md`.
 - XML malformado devolve `ErroValidacao` (HTTP 400) com mensagem **fixa** — a do `encoding/xml` cita o trecho que falhou, e trecho é conteúdo do usuário (regra 7). XXE coberto por teste
 - ⚠️ Zip bomb **não** é conferido: `Copy` não descomprime e a extração lê uma parte só; o upload já chama `vo.ConferirPacoteDocx`. Reavaliar ao descomprimir mais partes
 - Fixtures: `testdata/artigo-real-libreoffice.docx` (10 partes, LibreOffice, 40 blocos) e `artigo-desformatado.docx` (4 partes, sintético)
-- ⬜ faltam heurística estrutural (camada 2), persistência do CDM e rotas de análise. Ver `docs/plano-backend.md`, F2
+- `backend/internal/infra/ooxml/analisar_estrutura.go` — `AnalisarEstrutura`: abre DOCX, extrai blocos e aplica camadas 1 e 2. O worker serializa e persiste o CDM; POST análise, GET/PATCH estrutura e GET jobs implementados; ver `docs/plano-backend.md`, F2.
 
-## MOD: cdm ✅ (entidade pura)
+## MOD: cdm ✅ (entidade, heurística e serialização)
 **keywords:** cdm, bloco, papel, secao, origem, confianca, reclassificar, RefXML, TextoResumo, heuristica, llm, correção do usuário
 
 - `backend/internal/domain/cdm/bloco.go` — `Papel` (VO comparável, campos privados), `Secao(nivel)`, `Origem`, `Bloco`, `NovoBloco`, `(Bloco).Reclassificar`
 - `backend/internal/domain/cdm/heuristica.go` — `AplicarHeuristica([]Bloco) ([]Bloco, error)`, a **camada 2**
-- Cobertura 20/09: **PASS, 95,5%**, `-race`
+- Coberturas históricas de 20/09/2026: camada 2 **PASS, 95,5%**; após serialização **PASS, 96,7%**, ambas com `-race`. Não são medição global atual.
 - `Papel` sem nível: Titulo, ListaAutores, Resumo, PalavrasChave, Paragrafo, Citacao, ItemLista, Tabela, Figura, Legenda, Equacao, Referencia, NotaRodape. `Secao(n)` é o único com hierarquia, válido em **1..6**
 - `Origem` ∈ `estilo-docx` | `heuristica` | `llm` | `usuario`, case sensitive
 - 🔒 **Correção do usuário nunca é sobrescrita**: `Reclassificar` com origem automática sobre um bloco `OrigemUsuario` é **no-op sem erro** (rodar a heurística de novo é fluxo normal, não falha). Só outra correção do próprio usuário sobrescreve

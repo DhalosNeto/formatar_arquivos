@@ -1,8 +1,42 @@
 {
   "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["react", "typescript", "oxc"],
+  "categories": {
+    "correctness": "error",
+    "suspicious": "error",
+    "pedantic": "warn",
+    "perf": "warn"
+  },
+  "env": {
+    "browser": true,
+    "es2022": true
+  },
+  "plugins": [
+    "react",
+    "typescript",
+    "unicorn",
+    "oxc"
+  ],
   "rules": {
-    "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
-  }
+    "no-console": "error",
+    "eqeqeq": "error",
+    "no-debugger": "error",
+    "react/react-in-jsx-scope": "off",
+    "eslint/max-lines-per-function": "off",
+    "unicorn/prefer-query-selector": "off"
+  },
+  "overrides": [
+    {
+      "files": [
+        "**/*.test.ts",
+        "**/*.test.tsx",
+        "src/testes/**"
+      ],
+      "rules": {
+        "no-console": "off",
+        "eslint/require-await": "off",
+        "eslint/require-unicode-regexp": "off",
+        "unicorn/consistent-function-scoping": "off"
+      }
+    }
+  ]
 }

@@ -45,6 +45,11 @@ jobs:
       - name: Vet
         run: go vet ./...
 
+      # Sem isto, um teste com //go:build integration que não compila passa no
+      # CI e só quebra quando alguém roda a suíte de integração à mão.
+      - name: Vet dos testes de integração
+        run: go vet -tags=integration ./...
+
       - name: Lint
         uses: golangci/golangci-lint-action@v6
         with:

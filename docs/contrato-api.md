@@ -1,6 +1,6 @@
 # Contrato da API — para quem constrói o frontend
 
-**Atualizado:** 2026-09-20 · Base: `http://localhost:8080` em desenvolvimento
+**Atualizado:** 2026-09-22 · Base: `http://localhost:8080` em desenvolvimento
 
 Tudo sob o prefixo **`/v1`**. `GET /prontidao` responde **404**; o caminho é
 `/v1/prontidao`. Healthcheck configurado sem o prefixo falha em silêncio.
@@ -180,8 +180,8 @@ idempotência é derivada do documento no servidor. Duplo clique no botão não
 cria duas análises concorrentes, então não é preciso desabilitá-lo por medo
 disso (desabilite por clareza, se quiser).
 
-Não há rota de job ainda. **Para saber quando terminou, consulte
-`GET /v1/documentos/{id}`** e observe o `status`: `recebido` → `analisando` →
+Para acompanhar, consulte `GET /v1/jobs/{id}` usando o ID retornado.
+O documento também expõe o `status`: `recebido` → `analisando` →
 `analisado`, ou `falhou`.
 
 **404** se o documento não existe ou é de outro dono.
@@ -214,7 +214,7 @@ partir dele.
 `confianca` vai de 0 a 1. **Bloco de confiança baixa é onde o usuário mais
 provavelmente precisa corrigir**; vale destacar na interface.
 
-⚠️ **`lista_autores` nunca é devolvido hoje.** Nenhuma evidência textual
+⚠️ **`lista_autores` não é identificado automaticamente hoje.** Nenhuma evidência textual
 confiável separa um nome de autor de um parágrafo comum, então autores e
 afiliações vêm como `paragrafo` com confiança baixa. É trabalho da correção
 manual ou da camada de LLM (F5).
@@ -223,6 +223,39 @@ manual ou da camada de LLM (F5).
 **404** se não existe ou é de outro dono.
 
 ---
+
+### `PATCH /v1/documentos/{id}/estrutura`
+
+Corrige o papel de um bloco de documento `analisado`. Envie
+`Content-Type: application/json`, cookie de sessão e até 4096 bytes:
+
+```json
+{"ref_xml": 0, "papel": "secao", "nivel": 2}
+```
+
+`ref_xml` e `papel` são obrigatórios. `nivel` deve ser de 1 a 6 para `secao`;
+nos outros papéis, omita ou envie zero. Campos desconhecidos, duplicados,
+valores `null` e JSON adicional são recusados. Não envie texto nem origem.
+
+**200** devolve a estrutura completa, no formato do GET. O bloco corrigido
+fica com `origem: "usuario"` e `confianca: 1`, preservados pela classificação
+automática. **400** indica corpo, papel ou referência inválidos; **404**
+indica ausência de sessão, documento ausente ou de terceiro; **409** indica
+status incompatível ou alteração concorrente; **500** indica CDM corrompido.
+
+A gravação compara o CDM lido pelo servidor com o persistido. Em **409**,
+busque a estrutura novamente. Isso não detecta formulários antigos no navegador:
+o contrato ainda não oferece revisão/ETag enviada pelo cliente.
+
+### `GET /v1/jobs/{id}`
+
+Consulta o processamento de um documento da sessão. **200** retorna o mesmo
+formato de job do POST de análise, com `status` e `progresso` atuais.
+Os status são `pendente`, `executando`, `concluido`, `falhou` e `cancelado`
+(não há endpoint público de cancelamento nesta fase).
+A resposta não expõe `resultado`, chave de storage ou conteúdo do documento.
+**400** para ID inválido; **404** para ausência de sessão, job inexistente
+ou documento de terceiro. Use polling; SSE ainda não está disponível.
 
 ## Valores de `status`
 
@@ -246,12 +279,9 @@ não é exposta.
 
 Não construa tela para estes; eles chegam nas fases seguintes:
 
-- correção manual de papel de bloco — `PATCH .../estrutura` (F2, próximo recorte)
-- consulta de job por id — `GET /v1/jobs/{id}` (F2, próximo recorte). Até lá,
-  acompanhe pelo `status` do documento
 - catálogo de revistas e escolha de ruleset (F3)
 - disparar formatação e baixar DOCX/PDF/LaTeX (F3, F7)
-- acompanhamento de job por polling ou SSE (F2/F3)
+- acompanhamento de job por SSE (polling via GET já disponível)
 - cadastro, login e histórico por usuário (F7)
 
 O `plano-backend.md` tem a ordem e o que cada fase passa a expor.

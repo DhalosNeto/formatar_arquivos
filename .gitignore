@@ -30,3 +30,14 @@ npm-debug.log*
 # Python
 __pycache__/
 *.pyc
+
+# Documentos de trabalho, não versionados por decisão (27/09).
+# Ficam no disco para consulta local; o que tinha valor durável foi migrado para
+# docs/plano-backend.md, docs/estado-do-backend.md e docs/mapa-modulos.md.
+# Ver "Como escrever aqui" em docs/README.md antes de criar arquivo novo aqui.
+/docs/historico/
+/docs/f2-correcao-estrutura.md
+/docs/f3-rulesets.md
+/docs/f3-unidades.md
+/docs/astra-jev.md
+/docs/jev-decisao-exemplo.json

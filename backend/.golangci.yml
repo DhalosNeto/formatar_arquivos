@@ -1,49 +1,37 @@
+# Conjunto estrito de linters. O padrão do golangci-lint cobre pouco: a
+# auditoria de 27/09 passou por ele e ainda assim deixou 11 achados, e o padrão
+# não olha segurança (gosec) nem erro descartado (errcheck).
+#
+# Exclusões são declaradas aqui, com motivo, em vez de espalhadas em //nolint.
 version: "2"
 
-run:
-  timeout: 5m
-
 linters:
+  default: standard
   enable:
-    - errcheck
-    - govet
-    - ineffassign
-    - staticcheck
-    - unused
-    - bodyclose
-    - contextcheck
+    - errcheck      # erro descartado: a regra 2 do CLAUDE.md proíbe engolir erro
+    - gosec         # superfície de ataque
+    - bodyclose     # resposta HTTP sem Close vaza conexão
+    - contextcheck  # contexto não propagado (regra 3)
+    - nilerr        # `return nil` depois de checar err != nil
+    - rowserrcheck
+    - sqlclosecheck
     - errorlint
-    - gocritic
-    - gosec
-    - nilerr
     - noctx
-    - prealloc
-    - revive
     - unconvert
-    - unparam
     - wastedassign
+    - predeclared   # sombreamento de identificador pré-declarado
+    - usestdlibvars
 
-  settings:
-    errcheck:
-      check-type-assertions: true
-    gosec:
-      excludes:
-        # G104 é coberto pelo errcheck.
-        - G104
-    revive:
-      rules:
-        - name: exported
-          disabled: true  # a documentação do projeto é em português
+  # NÃO habilitar `misspell`: o dicionário dele é inglês e os nomes deste
+  # projeto são em português por decisão (CLAUDE.md, regra 1). Ele acusou 50
+  # falsos positivos — "dependencias", "metricas", "progresso" — e um linter
+  # que grita sem motivo treina todo mundo a ignorar linter.
 
   exclusions:
     rules:
-      # Testes podem ignorar erro de fechamento e usar dados previsíveis.
+      # Testes usam números "mágicos" e credenciais falsas por natureza.
       - path: _test\.go
-        linters:
-          - gosec
-          - errcheck
-          - unparam
-
-formatters:
-  enable:
-    - gofmt
+        linters: [gosec, errcheck, bodyclose]
+      # O handler do sidecar e os fixtures sintéticos não são código de produto.
+      - path: testdata/
+        linters: [gosec]

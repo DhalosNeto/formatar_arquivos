@@ -1,6 +1,6 @@
 # Plano do backend — F2 a F7
 
-**Atualizado:** 2026-09-20 · Substitui as fases de `plano.md` no que diz
+**Atualizado:** 2026-09-22 · Substitui as fases de `plano.md` no que diz
 respeito ao backend.
 
 Este plano cobre **só o backend**. O frontend é responsabilidade de outra
@@ -29,7 +29,10 @@ Estas não se negociam por pressa, e estão no `CLAUDE.md`:
    conhece o Echo.
 6. Cobertura mínima de **80% em `internal/domain/`**. Na revisão de 20/09,
    `documento/processamento` tem 93,8%; coberturas dos recortes aprovados não
-   tornam verde a suíte global, ainda bloqueada por legado e testes WIP.
+   tornam verde a suíte global. A auditoria aprovou arquivar integralmente a
+   spec legada, recuperável pelo histórico do git. A movimentação e a migração de quatro
+   asserções compatíveis para `job/execucao` foram concluídas; consultar a
+   medição atual da suíte global no estado do backend.
 7. Toda decisão que contraria este plano vira um **ADR** em `docs/adr/`.
 
 ---
@@ -39,10 +42,13 @@ Estas não se negociam por pressa, e estão no `CLAUDE.md`:
 O risco técnico real do projeto mora aqui.
 
 **Estado atual:** ✅ round-trip byte a byte, ✅ extração de blocos
-(`ooxml.ExtrairBlocos`), ✅ entidade do CDM (`domain/cdm`) e ✅ camada 1 da
-classificação (`ooxml.ClassificarPorEstiloDocx`) — pacotes verdes com `-race`,
-92,3% e 92,9%. ⬜ Heurística estrutural, persistência do CDM, os endpoints
-abaixo e a ligação do upload à fila continuam pendentes.
+(`ooxml.ExtrairBlocos`), ✅ CDM e serialização (`domain/cdm`), ✅ camadas 1 e 2
+da classificação, ✅ análise via fila com persistência do CDM,
+✅ `POST .../analisar`, `GET .../estrutura`, `PATCH .../estrutura` e
+`GET /v1/jobs/{id}`. As medições históricas por recorte
+e o fluxo real de 21/09 estão em `estado-do-backend.md`. Em 22/09, a suíte
+global com `-race` e a integração Postgres passaram; auditoria do delta
+PATCH/GET aprovada, com documentação corrigida.
 
 ### O que entra
 
@@ -107,10 +113,13 @@ Ela só reclassifica quando o papel **difere** do atual — concordar com a cama
 evidência textual separa um nome de autor de um parágrafo comum. É caso da F5
 ou da correção manual.
 
-**Ligar o upload à fila.** Hoje a conversão é síncrona e a fila está ociosa.
-Com a análise entrando no fluxo, o trabalho assíncrono passa a valer a pena.
+**Análise ligada à fila.** Após o upload, `POST .../analisar` cria ou obtém um
+job idempotente, consumido pelo worker. A conversão do preview no upload
+continua síncrona. A reivindicação seleciona somente `pendente`, sem retry
+automático de `falhou`; reenfileiramento, backoff e teto de tentativas ainda
+exigem uma política e implementação.
 
-⚠️ **Bloqueio conhecido:** o worker não tem porta para gravar
+⚠️ **Pendência do preview assíncrono, não da análise:** o worker não tem porta para gravar
 `chave_storage_pdf` em `documentos`. `DocumentoInternoRepo` só tem
 `AtualizarStatus` e `DefinirCDM`; `DefinirChavePreviewPDF` exige `vo.Dono`, e o
 domínio deliberadamente **não** tem "dono de sistema". Criar essa capacidade é
@@ -123,14 +132,14 @@ registro do preview no documento, falta recuperação de jobs que permanecem
 ### O que a API passa a expor
 
 ```
-POST  /v1/documentos/{id}/analisar     dispara a análise, devolve 202
-GET   /v1/documentos/{id}/estrutura    o CDM classificado
-PATCH /v1/documentos/{id}/estrutura    corrige o papel de um bloco
-GET   /v1/jobs/{id}                    progresso do processamento
+POST  /v1/documentos/{id}/analisar     implementado: análise, devolve 202
+GET   /v1/documentos/{id}/estrutura    implementado: CDM classificado
+PATCH /v1/documentos/{id}/estrutura    implementado: corrige o papel de um bloco
+GET   /v1/jobs/{id}                    implementado: progresso do processamento
 ```
 
-A correção manual grava `Origem: usuario` e **nunca** é sobrescrita por
-reclassificação posterior.
+O PATCH grava `Origem: usuario`; o domínio protege essa origem
+contra reclassificação automática posterior.
 
 ### Critério de pronto
 
@@ -150,12 +159,18 @@ real verificado, e a saída passa em `entity.ValidarCDM`.
 real: `POST .../analisar` devolve 202 (idempotente — duas chamadas, o mesmo
 job), o worker reivindica, roda `ooxml.AnalisarEstrutura`, persiste via
 `ConcluirAnalise`, e `GET .../estrutura` devolve os 40 blocos do artigo.
-Falha em qualquer etapa chama `MarcarFalha`: documento não fica preso em
-`analisando`.
+Depois de iniciar a análise, falhas no processamento levam a uma tentativa de
+`MarcarFalha`. Se essa gravação também falhar, o executor devolve ambas as
+causas em `errors.ErroPersistirFalha`, com mensagem e log fixos.
+A garantia é limitada: o banco pode recusar a gravação, deixando o documento
+em `analisando`; a finalização do job também pode falhar, deixando-o em
+`executando`. Recuperação e reconciliação dos dois estados continuam pendentes.
 
-⬜ **Falta para fechar a fase:** `PATCH .../estrutura` (correção manual) e
-`GET /v1/jobs/{id}`. O PATCH exige uma porta de escrita do CDM escopada ao
-dono — `DefinirCDM` só existe em `DocumentoInternoRepo`, sem `vo.Dono`.
+✅ `PATCH .../estrutura` (correção manual) e `GET /v1/jobs/{id}` implementados
+e testados com Postgres. O PATCH usa `EstruturaRepo.SalvarEstrutura`, escopada
+ao dono e com comparação de status/CDM anterior; `DefinirCDM` permanece interno.
+Auditoria independente do delta aprovada. Não é auditoria retroativa de todo o
+parser nem prova de prontidão de produção; ver riscos em `estado-do-backend.md`.
 
 ### Onde costuma dar errado
 
@@ -179,15 +194,61 @@ Timestamps de entrada de ZIP quebram golden file: normalize.
 
 É aqui que o sistema passa a valer para quem usa.
 
+**Iniciada em 22/09:** primeiro recorte de conversões de unidade no domínio,
+independente de valores normativos. Contrato pré-auditado e rastreabilidade em
+este documento, seção F3. Schema, loader estrito e CLI validar implementados e
+testados. Seed imutável e comando semear implementados em 27/09;
+mutadores e endpoints ainda pendentes. Evidências finais na retomada do seed.
+
 ### Pré-requisito que não é código
 
-**`backend/rulesets/` está vazio.** Antes de implementar, alguém precisa
-preencher os valores da **ABNT NBR 14724** a partir de fonte oficial: margens,
+**`backend/rulesets/` contém o schema técnico, mas nenhum perfil normativo publicado.**
+Antes de publicar um perfil, alguém precisa preencher os valores da
+**ABNT NBR 14724** a partir de fonte oficial: margens,
 corpo, entrelinha, recuo, ordem das seções. A skill `normas-abnt` tem a tabela
 de conversão de unidades pronta e os valores normativos como **placeholder de
 propósito** — não se inventa valor de norma sem fonte.
 
-Isso não é trabalho de implementação: é decisão sobre qual documento é a fonte.
+Isso exige fonte verificável antes de publicar o perfil normativo. Não bloqueia
+os recortes técnicos com fixtures sintéticas (conversões, seed e motor).
+
+#### Geousp — o que a pesquisa achou, e o que ficou ambíguo
+
+Periódico escolhido no produto. Busca consultada em **22/09/2026** nas
+[diretrizes oficiais](https://revistas.usp.br/geousp/pt_BR/about/submissions):
+
+| Item | Valor encontrado |
+|---|---|
+| Formato | Word, A4 |
+| Margens | 2,5 cm |
+| Corpo | Times New Roman 12 |
+| Numeração de página | ausente |
+| Recuo e espaçamento | não especificados |
+
+⚠️ **A entrelinha é ambígua e NÃO foi reinterpretada.** O texto oficial diz
+"entrelinhas de 1,5 **cm**". Entrelinha se expressa em multiplicador de linha ou
+em pontos, não em centímetros — então "1,5 cm" pode significar o multiplicador
+1,5 (leitura provável) ou uma medida absoluta de 1,5 cm (≈ 42,5 pt, que daria um
+espaçamento bem maior). **Converter silenciosamente para multiplicador seria
+inventar a norma.**
+
+⚠️ **Procedência do dado:** o acesso direto à página caiu em loop de
+redirecionamento; os trechos vieram do resultado indexado da página oficial.
+Revalidar contra a diretriz ou o template oficial antes de publicar o perfil.
+
+E o principal: **diretriz de periódico não substitui a norma ABNT.** As duas
+fontes são independentes e um perfil Geousp não implica conformidade com a
+NBR 14724.
+
+#### Conversões, que já existem
+
+`internal/domain/vo/unidades.go` converte para as unidades inteiras do OOXML:
+centímetros → twips (fator exato `1440/2.54`), pontos → twips (20), pontos →
+meios-pontos (2, para tamanho de fonte) e entrelinha → unidades (240, para
+`lineRule="auto"`). Arredondamento `math.Round`, com NaN, infinitos e negativos
+recusados antes de arredondar, e teto técnico int32 conferido inclusive durante
+a multiplicação. **Esse teto é técnico e não equivale ao limite de cada atributo
+OOXML** — os limites contextuais ficam na validação do ruleset.
 
 ### O que entra
 
@@ -303,8 +364,9 @@ teto.
 Teto de custo tem que ser verificado **antes** da chamada, não depois.
 
 Esta fase prevê envio de conteúdo do usuário ao provedor LLM. Trate o recorte
-enviado como decisão de privacidade, não de custo. Isso não elimina o risco
-atual de saída de rede do conversor, registrado em `estado-do-backend.md`.
+enviado como decisão de privacidade, não de custo. O conversor já está na rede
+`sem-saida` (`internal: true`), sem porta 2004 publicada no host; os controles
+e seus limites estão registrados em `estado-do-backend.md`.
 
 ---
 

@@ -52,8 +52,9 @@ test-e2e: ## Roda os testes ponta a ponta do front
 cobertura: test ## Abre o relatório de cobertura no navegador
 	cd backend && go tool cover -html=coverage.out
 
-lint: ## Roda os linters do backend e do front
+lint: ## Roda os linters do backend e do front (conjunto estrito)
 	cd backend && gofmt -l . && go vet ./...
+	cd backend && go vet -tags=integration ./...
 	cd backend && go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest run ./...
 	cd frontend && npm run lint && npm run typecheck
 
