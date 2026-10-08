@@ -61,6 +61,15 @@ func TestEstruturaRespostaSerializaEnvelopeExigidoPeloContrato(t *testing.T) {
 	assert.EqualValues(t, 1, segundo["nivel"])
 }
 
+func TestEstruturaRespostaExpoeRevisoes(t *testing.T) {
+	t.Parallel()
+	papel := &webmodel.PapelSugeridoResposta{Nome: "secao", Nivel: 2}
+	resposta := webmodel.EstruturaResposta{Versao: 1, Blocos: []webmodel.BlocoResposta{}, Revisoes: []webmodel.RevisaoEstruturaResposta{{RefXML: 3, PapelSugerido: papel, Confianca: .7, Acao: "confirmar"}}}
+	dados, err := json.Marshal(resposta)
+	require.NoError(t, err)
+	assert.Contains(t, string(dados), `"revisoes":[{"ref_xml":3,"papel_sugerido":{"nome":"secao","nivel":2},"confianca":0.7,"acao":"confirmar"}]`)
+}
+
 func TestJobRespostaSerializaCamposPublicosSemVazarResultado(t *testing.T) {
 	t.Parallel()
 

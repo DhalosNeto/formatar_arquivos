@@ -137,6 +137,39 @@ func TestNovoIndiceComBlocosNilProduzIndiceValido(t *testing.T) {
 	assert.Empty(t, indice.Blocos)
 }
 
+func TestIndiceSerializarDesserializarRevisoesEFormatoLegado(t *testing.T) {
+	t.Parallel()
+	bloco := deveNovoBloco(Paragrafo, "texto", .4, OrigemHeuristica, 3)
+	bloco2 := deveNovoBloco(Paragrafo, "outro", .4, OrigemHeuristica, 4)
+	papel := Resumo
+	indice := NovoIndice([]Bloco{bloco, bloco2})
+	indice.Revisoes = []RevisaoEstrutura{{RefXML: 3, PapelSugerido: &papel, Confianca: .7, Acao: "confirmar"}, {RefXML: 4, Confianca: .2, Acao: "revisar"}}
+	dados, err := indice.Serializar()
+	require.NoError(t, err)
+	volta, err := Desserializar(dados)
+	require.NoError(t, err)
+	require.Equal(t, indice, volta)
+	legado, err := Desserializar([]byte(`{"versao":1,"blocos":[]}`))
+	require.NoError(t, err)
+	require.Empty(t, legado.Revisoes)
+}
+
+func TestIndiceDesserializarRecusaRevisaoInvalida(t *testing.T) {
+	t.Parallel()
+	for _, revisoes := range []string{
+		`[{"ref_xml":0,"confianca":0.5,"acao":"apagar"}]`,
+		`[{"ref_xml":0,"confianca":1.5,"acao":"revisar"}]`,
+		`[{"ref_xml":0,"confianca":0.5,"acao":"revisar"},{"ref_xml":0,"confianca":0.6,"acao":"confirmar"}]`,
+		`[{"ref_xml":4,"confianca":0.5,"acao":"revisar"}]`,
+		`[{"ref_xml":0,"confianca":0.5,"acao":"confirmar"}]`,
+		`[{"ref_xml":0,"confianca":0.5,"acao":"revisar","motivo":"texto livre"}]`,
+	} {
+		dados := []byte(`{"versao":1,"blocos":[{"papel":{"nome":"paragrafo"},"texto_resumo":"x","confianca":0.4,"origem":"heuristica","ref_xml":0}],"revisoes":` + revisoes + `}`)
+		_, err := Desserializar(dados)
+		require.Error(t, err)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Papel.MarshalJSON — formato do objeto e omissão de nível zero
 // ---------------------------------------------------------------------------

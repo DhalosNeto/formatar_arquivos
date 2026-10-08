@@ -2,6 +2,7 @@ package ooxml
 
 import (
 	"archive/zip"
+	"bytes"
 	"encoding/xml"
 	"io"
 	"strconv"
@@ -38,19 +39,12 @@ type BlocoBruto struct {
 // ExtrairBlocos lê word/document.xml e devolve os blocos de nível superior na
 // ordem do documento.
 //
-// É um caminho paralelo, estritamente de LEITURA: o decoder consome uma cópia
-// recém-aberta da entrada do ZIP e nada é escrito de volta em d.arquivos, que
-// é o que Salvar recopia. Parsear para ler não pode virar parsear para
-// escrever — o encoding/xml reescreveria namespaces e corromperia o pacote.
-func (d *Documento) ExtrairBlocos() ([]BlocoBruto, error) {
-	arquivo := d.parte(parteDocumentoPrincipal)
-	if arquivo == nil {
-		return nil, errors.NovoErroValidacao("arquivo", "o pacote não contém word/document.xml")
-	}
-
-	conteudo, err := arquivo.Open()
+// A leitura prioriza a última substituição aceita, inclusive vazia. O parser
+// não escreve XML de volta, pois isso reescreveria os namespaces do pacote.
+func (documento *Documento) ExtrairBlocos() ([]BlocoBruto, error) {
+	conteudo, err := documento.abrirDocumentoPrincipal()
 	if err != nil {
-		return nil, errors.NovoErroValidacao("arquivo", "não foi possível ler word/document.xml do pacote")
+		return nil, err
 	}
 	defer func() { _ = conteudo.Close() }()
 
@@ -68,6 +62,21 @@ func (d *Documento) ExtrairBlocos() ([]BlocoBruto, error) {
 			return lerCorpo(decodificador)
 		}
 	}
+}
+
+func (documento *Documento) abrirDocumentoPrincipal() (io.ReadCloser, error) {
+	if conteudo, substituida := documento.partesSubstituidas[parteDocumentoPrincipal]; substituida {
+		return io.NopCloser(bytes.NewReader(conteudo)), nil
+	}
+	arquivo := documento.parte(parteDocumentoPrincipal)
+	if arquivo == nil {
+		return nil, errors.NovoErroValidacao("arquivo", "o pacote não contém word/document.xml")
+	}
+	conteudo, err := arquivo.Open()
+	if err != nil {
+		return nil, errors.NovoErroValidacao("arquivo", "não foi possível ler word/document.xml do pacote")
+	}
+	return conteudo, nil
 }
 
 // parte localiza uma entrada do ZIP pelo nome.

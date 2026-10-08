@@ -144,3 +144,22 @@ func TestEstruturaCorrigir(t *testing.T) {
 	_, err = service.NovoServicoEstrutura(nil)
 	require.Error(t, err)
 }
+
+func TestCorrigirRemoveSomenteRevisaoDoAlvo(t *testing.T) {
+	dono, err := vo.NovoDonoSessao(uuid.New())
+	require.NoError(t, err)
+	blocos := []cdm.Bloco{{Papel: cdm.Paragrafo, TextoResumo: "alvo", Confianca: .4, Origem: cdm.OrigemHeuristica, RefXML: 7}, {Papel: cdm.Paragrafo, TextoResumo: "outro", Confianca: .4, Origem: cdm.OrigemHeuristica, RefXML: 9}}
+	indice := cdm.NovoIndice(blocos)
+	papel := cdm.Resumo
+	indice.Revisoes = []cdm.RevisaoEstrutura{{RefXML: 7, Confianca: .4, Acao: "revisar"}, {RefXML: 9, PapelSugerido: &papel, Confianca: .6, Acao: "confirmar"}}
+	bruto, err := indice.Serializar()
+	require.NoError(t, err)
+	doc := entity.Documento{ID: uuid.New(), Dono: dono, Status: entity.StatusAnalisado, CDM: bruto}
+	repo := &estruturaFake{documento: doc}
+	servico, err := service.NovoServicoEstrutura(repo)
+	require.NoError(t, err)
+	resultado, err := servico.Corrigir(context.Background(), dono, doc.ID, 7, cdm.Titulo)
+	require.NoError(t, err)
+	require.Len(t, resultado.Revisoes, 1)
+	require.Equal(t, 9, resultado.Revisoes[0].RefXML)
+}

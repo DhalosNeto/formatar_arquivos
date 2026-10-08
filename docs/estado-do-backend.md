@@ -1,10 +1,544 @@
 # Estado do backend — resumo executivo
 
-**Atualizado:** 2026-09-27 · Medições históricas de 20/09 a 27/09 preservadas abaixo
+**Atualizado:** 2026-10-08 · Medições históricas preservadas abaixo
 
 F3: seed imutável Postgres e CLI semear entregues; testes unitários com race,
 integrações reais e revisão aprovados. Motor, perfis normativos e endpoints
-ainda pendentes. Ponto de pausa e próxima tarefa em `docs/retomada.md`.
+ainda pendentes como fluxo completo. Página/margens, alinhamento, entrelinha,
+recuo da primeira linha, espaçamento antes/depois e tipografia direta dos runs
+entregues como componentes;
+ponto de pausa e próxima tarefa em `docs/retomada.md`.
+
+## Medição de 08/10 — leitura de ruleset por ID concluída
+
+Os rulesets eram semeados e NUNCA lidos de volta: `RulesetRepo` só tinha
+`Semear`, `data/postgres/ruleset.go` só escrevia, `cmd/rulesetctl` só semeava.
+Sem leitura, `formatador.Planejar` não tem de onde obter a `Definicao`, e
+nenhuma integração do motor é possível. Recorte `f3-leitura-ruleset-por-id`:
+porta segregada `ConsultaRulesetRepo` com
+`ObterPorID(ctx, uuid.UUID) (ruleset.Definicao, bool, error)`.
+
+Leitura por **ID**, não por slug+versão: `jobs.ruleset_id REFERENCES
+rulesets(id)` e `entity.Job.RulesetID` é `*uuid.UUID`. Slug+versão serve ao
+catálogo, pendente em `docs/contrato-api.md`.
+
+Pré-auditoria: arquitetura APROVOU COM CORREÇÕES; segurança REPROVOU a primeira
+versão (ALTO) e APROVOU COM CORREÇÕES a revisada. Todas incorporadas.
+
+### Implementado e validado contra PostgreSQL em 08/10
+
+`ConsultaRulesetRepo` em `domain/ruleset/repository/ruleset.go`,
+`contracts.ConsultaRulesetRepo` + `RulesetsConsulta()` em
+`data/contracts/contratos.go` e `data/postgres/conexao.go`, e
+`decodificarRuleset` + `ObterPorID` em `data/postgres/ruleset.go`.
+
+`decodificarRuleset` é pura e testada sem banco: teto de tamanho →
+`json.Unmarshal` → `Validar()`, tudo classificado como `*ErroAplicacao` (500),
+nunca `*ErroValidacao`, e o `*ErroValidacao` original NÃO é encadeado — senão
+`rotasutil.Classificar` acharia e responderia 400 com os nomes de campo em
+`razoes`. A mensagem de `Validar` interpola só `Campos[0].Campo`.
+
+`ObterPorID` lê `SELECT CASE WHEN octet_length(definicao::text) <= 65536 THEN
+definicao END, slug, versao, ativo WHERE id=$1`. O teto vai no SQL porque é a
+única guarda que protege a memória do worker: `Scan` materializa o jsonb antes
+de qualquer verificação em Go. Acima do teto o servidor manda NULL e o `Scan`
+materializa nada. Não filtra `ativo` — devolve o flag. Confere procedência
+(coluna vs JSON). Falha de driver segue o idioma de `erroSeed`, que não
+encadeia a causa, e NÃO `envolverPostgres`.
+
+**Evidência em 08/10/2026 08:30, dir `backend`:** `go build && go vet &&
+gofmt -l .` PASS; `go vet -tags=integration ./...` PASS (gate do projeto,
+`Makefile:57`); `golangci-lint run ./...` 0 issues; `go test ./... -race
+-count=1` exit 0, 34 pacotes ok, nenhum FAIL/panic/DATA RACE.
+
+Revisões independentes do delta: segurança APROVOU (as seis correções que ela
+exigiu foram conferidas no código, uma por uma); arquitetura APROVOU COM
+CORREÇÕES, e as duas que ela marcou como "antes de fechar" foram feitas —
+amarrar o teto da leitura a `rulesetinfra.TamanhoMaximoBytes` no teste (era
+literal `65536`, e subir o teto da entrada quebraria a leitura em silêncio) e
+remover a segunda avaliação de `definicao::text`, que destoastava linha TOASTed
+duas vezes e deixava um termo de guarda inalcançável.
+
+**Fechamento posterior em 08/10:** V3 executada pelo principal usando o Podman
+5.7.0 já disponível e o procedimento de `backend/migrations/README.md`:
+
+```sh
+DOCKER_HOST=unix:///run/user/1000/podman/podman.sock \
+MIGRACOES_REDE_CONTAINER=slirp4netns TESTCONTAINERS_RYUK_DISABLED=true \
+go test ./internal/data/postgres -tags integration -run 'TestObterRulesetPorID' -race -count=1 -v
+```
+
+Resultado: exit 0, pacote Postgres 11.226s; os sete testes A8–A14 passaram,
+incluindo quatro divergências de procedência e as fronteiras 65536/65537 bytes.
+PostgreSQL descartável criado e removido pelo TestMain. Validador e segurança
+aprovaram independentemente o delta corretivo final, por revisão estática.
+Build/vet/gofmt passaram novamente; V1 e suíte global V2 mantêm a evidência
+histórica acima, sem nova execução global neste fechamento documental.
+A14 verifica a recusa por tamanho; não mede alocação nem tráfego do driver.
+
+Evidência focal preservada antes de substituir a spec concluída: em
+08/10/2026 às 08:16, `go test ./internal/data/postgres -race -count=1`
+passou (1.053s), incluindo os seis `TestDecodificarRuleset*` e
+`TestSemearValidaLoteAntesDeAcessarPool`; repetido às 08:30 após as correções,
+também PASS. O RED original foi por símbolos ausentes. A validação focal,
+os gates globais acima e a integração posterior pertencem a
+`f3-leitura-ruleset-por-id`; não são evidências do próximo gate de criação.
+
+### Planejamento de 08/10 — gate de ruleset inativo na criação de job (em execução)
+
+Recorte `f3-gate-ruleset-inativo`: `TipoJob.ValidarRulesetParaNovoJob(ativo *bool)`
+em `domain/job/entity/tipo.go` (regra pura; `nil` = ausente CONFIRMADO, nunca
+"não foi possível saber"), aplicada dentro de `InserirOuObter`
+(`data/postgres/job.go`) na mesma transação, com `FOR SHARE` na linha de
+`rulesets`. Ausente e inativo devolvem erro IDÊNTICO em `ruleset_id`, por
+exigência de segurança: distinguir viraria oráculo de enumeração do catálogo.
+
+Ordem normativa: **autorização do documento → gate → INSERT → releitura**.
+Repetição de chave VENCE o gate — sem isso, repetir chave depois de o perfil ser
+desativado passaria a falhar e quebraria a repetição terminal que a porta
+promete, além do teste `postgres_integration_test.go:622`.
+
+Por que não "inserir e validar depois": a checagem de FK do INSERT toma
+automaticamente `FOR KEY SHARE`, que NÃO conflita com o `FOR NO KEY UPDATE` do
+`UPDATE ativo=false` — validar depois do INSERT nunca obteria o lock
+necessário. (A justificativa de `SAVEPOINT` registrada antes estava ERRADA:
+ele só seria preciso para continuar a transação, e o caminho reprovado é
+terminal.) Fato de apoio já provado pela suíte: `ON CONFLICT DO NOTHING` não
+dispara a checagem de FK (`postgres_integration_test.go:639-648`).
+
+Pré-auditoria: duas rodadas de arquitetura e segurança, ambas APROVA COM
+CORREÇÕES na segunda. Correções incorporadas incluem trocar a assinatura para
+`*bool` (a versão com dois `bool` adjacentes tinha troca behavioralmente
+indetectável), reescrever o contrato do adaptador como invariantes em vez de
+ordem de queries, e remover duas afirmações INOBSERVÁVEIS que nenhum teste
+poderia derrubar.
+
+### Implementado e verificado em 08/10, integração inclusa
+
+`TipoJob.ValidarRulesetParaNovoJob(ativo *bool)` em `entity/tipo.go` e o gate
+dentro de `InserirOuObter` (`data/postgres/job.go`). Ordem no código:
+`SET LOCAL lock_timeout = '3s'` → `FOR SHARE` em `documentos` → gate → INSERT →
+releitura. O gate só roda sob `ExigeRuleset()`; lê `SELECT ativo FROM rulesets
+WHERE id=$1 FOR SHARE` na mesma transação; `pgx.ErrNoRows` → nil (ausente
+confirmado), outro erro → `envolverPostgres`, nunca `*ErroValidacao`.
+`RulesetID` nil não consulta e não desreferencia.
+
+**A implementação ficou mais barata que o contrato original.** Em vez do SELECT
+extra em toda criação, o gate roda primeiro e só consulta a chave **quando
+reprova**: caminho feliz não paga query a mais, e o custo fica no caminho de
+rejeição, que é raro. Round-trips: antes 4; agora 5 para análise/preview
+(`SET LOCAL`) e 6 para formatar. O helper `obterJobDaChave` devolve
+`(job, achou, err)` e cada chamador aplica o seu significado para zero linhas —
+`ErroAplicacao` na releitura pós-conflito, erro do gate no caminho reprovado.
+
+**Evidência em 08/10/2026 19:51, dir `backend`:** build/vet/vet-integration/
+gofmt PASS; `golangci-lint run ./...` 0 issues; `go test ./... -race -count=1`
+exit 0, 34 pacotes. Integração com Podman: `-race` exit 0 em 19.265s, com
+`TestInserirOuObterGateDePerfilUsaForShare` em 0,23s — a prova do modo de lock
+executou de fato.
+
+**O RED provou por execução os fundamentos de lock**, que antes eram só
+raciocínio: hoje o job É criado contra perfil inativo; ausente dá
+`jobs_ruleset_id_fkey` 23503 (500, não 400); e o `FOR KEY SHARE` da checagem de
+FK NÃO conflita com o `FOR NO KEY UPDATE` do `UPDATE ativo=false`, o que
+justifica o `FOR SHARE` explícito. Há também o CHECK
+`jobs_ruleset_obrigatorio_para_formatar` (`migrations/00001:69`), que já recusava
+formatar sem ruleset, mas como erro de driver.
+
+### Defeito de teste encontrado no fechamento, e a lição
+
+`TestInserirOuObterAnalisarComCatalogoVazio` era **dependente de ordem**: a
+pré-condição `SELECT count(*) FROM rulesets == 0` passava só porque `go test`
+roda arquivos em ordem alfabética (`postgres_` antes de `ruleset_`), e
+`ruleset_integration_test.go` semeia em 19 pontos **sem nenhum cleanup**.
+Provado por `-shuffle=on`, que derrubou o teste. Corrigido tornando-o hermético
+(cortada a contagem global, mantida a parte observável) e renomeado para
+`TestInserirOuObterAnalisarSemRuleset`, porque o nome antigo anunciava uma
+pré-condição que ele não tem. Reverificado com a seed exata que falhava.
+**Lição:** pré-condição sobre estado GLOBAL do banco num pacote de integração
+com container compartilhado é dependência de ordem disfarçada, e a mensagem de
+falha aponta para a fixture errada. Vale rodar `-shuffle=on` ao fechar recorte
+que toque testes de integração.
+
+### Débitos e limites registrados por este recorte
+
+- **BLOQUEANTE do recorte do executor — o gate é de CRIAÇÃO e NÃO retira perfil
+  de circulação.** Job pendente criado antes da desativação continua
+  executável; `Job.Reenfileirar` (`entity/job.go:165`) o devolve para pendente;
+  `Reivindicar` (`job.go:200`) não consulta `rulesets`. O lugar do limite de
+  takedown é o EXECUTOR, e a porta necessária já existe e já devolve o flag:
+  `postgres/ruleset.go` `ObterPorID` retorna `(definicao, ativo, error)` e
+  nenhum Go consome esse bool. Débito: executor recusa job de formatação cujo
+  ruleset está inativo no momento da reivindicação. **Não ler a aprovação deste
+  recorte como "o operador já consegue retirar um perfil" — isso é falso.**
+- **Contexto que torna os riscos LATENTES:** `criacao.Servico` tem UM consumidor
+  hoje, `webservices/analise.go:55`, que cria `TipoAnalisar`. Nenhuma rota cria
+  `TipoFormatar` e o executor não tem branch de formatar. O gate é defesa em
+  profundidade na porta de dados, não gate exposto por HTTP; oráculo, DoS de
+  lock e amplificação só se ativam com o recorte da rota de formatação.
+- **Pool de 10 sem prazo de statement.** `POSTGRES_MAX_CONEXOES` default 10
+  (`config.go:77`), sem `statement_timeout`, sem `lock_timeout` e sem prazo por
+  requisição (`cmd/api/main.go:121` é desligamento). O gate acrescenta um
+  SEGUNDO ponto de espera por lock, e cada chamada presa retém uma das 10. O
+  recorte declara `SET LOCAL lock_timeout = '3s'` na transação como mitigação,
+  mas **ela NÃO é provada por critério**: provar exigiria esperar mais que o
+  próprio `lock_timeout`, isto é, um teste lento. Mitigação declarada e não
+  verificada. **E o teto efetivo é esse valor, não o prazo de quem chama:** não
+  existe deadline por requisição no caminho HTTP — os únicos `WithTimeout` do
+  projeto são o do health check (`saude/controlador.go:91`) e o do desligamento
+  (`cmd/api/main.go:121`). Como `lock_timeout` é POR AQUISIÇÃO, `documentos` mais
+  `rulesets` somam até ~6s retendo a mesma conexão, e dez requisições
+  concorrentes esgotam o pool por esse intervalo se um operador deixar transação
+  aberta em `rulesets`. Fechar isso exige prazo por requisição: recorte próprio.
+- **O `FOR SHARE` não bloqueia o operador indefinidamente**, ao contrário do que
+  se poderia supor: o Postgres enfileira o *tuple lock*, então os `FOR SHARE`
+  que chegam depois ficam ATRÁS do `UPDATE` que espera. O operador aguarda só as
+  transações em voo. E no caminho reprovado o lock só é tomado quando o perfil
+  EXISTE e está inativo — no caso ausente não há tupla, logo não há lock.
+- **`RulesetsConsulta()` segue sem consumidor de produção** (só testes de
+  integração). É porta sem cliente: se o recorte dono não entregar o consumidor,
+  é código morto a deletar. O gate NÃO a consome, por precisar da mesma
+  transação e do `FOR SHARE`.
+- **Teto do `FOR SHARE`:** compra pouco — um job criado contra perfil desativado
+  milissegundos antes é janela que permanece aberta de qualquer forma. Mantido
+  porque é uma palavra de SQL, locks shared não contendem entre si, e sem ele
+  "desativar" fica sem ponto de corte definível. Vários lockers shared na mesma
+  linha quente usam multixact; irrelevante nesta escala, revisitar se criação de
+  job de formatação virar caminho de alta concorrência.
+- **`ExigeRuleset` é fail-open** (`entity/tipo.go:24` é `tipo == TipoFormatar`):
+  um tipo futuro que exija norma escapa do gate em silêncio. Registrado no
+  comentário de C1, não corrigido.
+- **Duas afirmações removidas por serem INOBSERVÁVEIS**, e vale lembrar por quê:
+  "análise e preview não pagam query alguma" e "sem query ao catálogo". `NovoJob`
+  recusa `RulesetID` não-nil para tipo que não exige (`job.go:58-59`), então para
+  `TipoAnalisar` o `RulesetID` é sempre nil e uma query incondicional viraria
+  `WHERE id IS NULL` — sem linha, sem lock, resultado idêntico. Nenhum teste
+  poderia derrubar a afirmação.
+- **Sem rate limit na criação de job** (middleware tem só identificação, log,
+  pânico e métrica). Preexistente, não piorado por este recorte.
+
+## Fechamento de 08/10 — teto por placeholder
+
+A última concatenação de VALOR em SQL deste pacote foi trocada por parâmetro: a
+query de `ObterPorID` é agora uma `const` com `octet_length(definicao::text) <=
+$2` e o teto vai como argumento. `strconv` deixou de ser importado. Verificado
+contra Postgres real: o subcaso `TetoDeTamanhoNoSQL/exatamente_no_teto_e_lido`
+e `um_byte_acima_do_teto_recusado` são exatamente o que prova o binding do `$2`,
+e os dois passam. Gates finais em 08/10 18:55: build/vet/vet-integration/gofmt
+PASS, `golangci-lint` 0 issues, suíte global `-race` exit 0 com 34 pacotes.
+
+### Buraco no gate de lint, não deste recorte
+
+`make lint` roda `go vet -tags=integration ./...` mas o `golangci-lint` **sem**
+a tag, então arquivos `//go:build integration` nunca passam pelo linter
+estrito. Rodando com a tag aparecem 2 issues preexistentes:
+`f2_http_integration_test.go:57` (noctx) e `postgres_integration_test.go:855`
+(staticcheck QF1002).
+
+### Débitos e bloqueios registrados por este recorte
+
+- **BLOQUEANTE do recorte do executor — não existe gate de `ativo`.**
+  `job/criacao/servico.go:53` aceita `RulesetID` do cliente e só a FK
+  `ON DELETE RESTRICT` confere existência; o novo repositório lê `ativo`, mas
+  a criação de job ainda não o consulta. Como arquivo
+  semeado é imutável e não há DELETE, `ativo=false` é o ÚNICO recurso do
+  operador para retirar um perfil de circulação — perfil com diretriz errada ou
+  sob takedown continua aplicável a jobs NOVOS, e o operador acredita tê-lo
+  retirado. Este recorte DEVOLVE o flag para que o gate custe zero query extra.
+  Construir o gate é bloqueante do recorte que criar a branch `TipoFormatar`.
+  **Ao construí-lo:** a resposta HTTP não deve distinguir "inativo" de "não
+  encontrado" — mensagem genérica em `ruleset_id`, senão o gate vira oráculo de
+  enumeração do catálogo.
+- **Reprodutibilidade SEM LASTRO — o checksum nunca é verificado.** O risco não
+  é adulteração via SQL (quem tem SQL reescreve o checksum também, então contra
+  adversário privilegiado o campo vale zero). O risco residual é ALTERAÇÃO
+  SEMANTICAMENTE VÁLIDA: trocar `margens.esquerda_cm` de 3,0 para 2,0 passa por
+  `Definicao.Validar()` e pela conferência de procedência slug/versao, e nada
+  detecta. A afirmação de reprodutibilidade de `definicao.go:17-19` e do
+  CLAUDE.md fica sem lastro até a verificação existir. Pré-requisito: medir a
+  estabilidade do round-trip `jsonb`, que normaliza ordem de chaves e formato
+  numérico (`21.0` vs `21` em `float64` é o caso duvidoso). **Não alegar
+  reprodutibilidade garantida antes dessa medição.**
+- **SSRF em `Fonte`, fora deste recorte e importante.** `definicao.go:84-87`
+  exige só host não vazio e esquema http/https, aceitando
+  `http://169.254.169.254/...` e `http://localhost:5432`. Nada busca `Fonte`
+  hoje. No dia em que algo no servidor baixar a diretriz, é SSRF para metadata
+  de cloud e rede interna. A correção pertence à validação.
+- **`envolverPostgres` pode expor dados do driver em log.** Seu comentário
+  foi corrigido neste recorte; o corpo continua sendo
+  `errors.Envolver`, cujo `Error()` interpola `%v` do original. A metade sobre
+  `PgError.Detail` se sustenta em pgx v5.11.0, mas `ConnectError` e
+  `perDialConnectError` emitem usuário, banco, endereço e hostname, que
+  `rotasutil.go:22` grava em log nível Error. O corpo HTTP está protegido.
+  Este recorte NÃO usa a função no caminho novo (usa o idioma de `erroSeed`,
+  que deliberadamente não encadeia) e corrige o comentário que mente; os
+  chamadores existentes seguem expostos. Consertar a função exige recorte
+  próprio.
+- **Sem statement timeout.** O pool tem só `ConnectTimeout`
+  (`conexao.go:56`) e `Semear` embrulha 2 min próprios (`ruleset.go:69`).
+  `ObterPorID` chamada com ctx de worker de vida longa pode prender conexão do
+  pool e estagnar a fila. Mesma exposição das leituras de job existentes; vira
+  requisito do recorte do executor.
+- **A coluna `nome` fica fora da conferência de procedência**, deliberadamente:
+  `nome` só é lida por `inserirRuleset` na idempotência do seed, e divergência
+  coluna/jsonb nela é cosmética. `slug` e `versao` são conferidos porque
+  carregam a `UNIQUE (slug,versao)` e definem procedência.
+- **Porta sem consumidor em produção:** a leitura nasce com zero chamador — a
+  branch `TipoFormatar` está fora de escopo. O `var _` segura a compilação, mas
+  a assinatura só é validada contra uso real no recorte seguinte.
+- **Bloqueio de V3 resolvido em 08/10:** o binário Docker continua ausente,
+  mas Testcontainers executou os testes com o socket do Podman. A8–A14 têm
+  resultado PASS contra banco real, conforme medição acima.
+- **Sugestões mantidas fora do fechamento:** usar `$2` para o teto é uma
+  preferência de estilo; a concatenação atual usa somente constante inteira.
+  A mensagem da função pura agrupa vazio e excesso como limite de tamanho.
+  Se surgir outro chamador, revisar se essa distinção precisa ser pública.
+  Cancelamento ainda pode ser classificado como 500/log Error pelo adaptador
+  HTTP; definir tratamento e prazo do job no recorte do executor.
+
+## Medição de 07/10 — plano de formatação e adaptador agregador
+
+`formatador.Planejar(cdm.Indice, ruleset.Definicao) (Plano, error)` em
+`internal/domain/formatador/plano.go` é a porta de validação do fluxo: delega
+os invariantes do índice a `cdm.Indice.Validar()`, chama `Definicao.Validar()`,
+propaga os dois erros SEM reclassificar e seleciona só os blocos
+`cdm.Paragrafo`, em ordem crescente. Índice sem blocos é válido.
+`(*ooxml.Documento).AplicarPlano` em `internal/infra/ooxml/formatar.go` executa
+o plano: página nas seções correntes e as seis propriedades de corpo nos
+ordinais selecionados, reusando os mutadores já existentes.
+
+`cdm.Indice.Validar()` nasceu neste recorte em `domain/cdm/serializacao.go`,
+não em `formatador`: o invariante já morava em `cdm`, que define
+`ErroRefXMLDuplicado`, e `Desserializar` NÃO checa duplicata (só
+`validarRevisoes`, e apenas quando há revisões). Ordem das guardas: versão →
+RefXML duplicado → blocos inválidos. Duplicata VENCE bloco inválido e devolve
+`ErroRefXMLDuplicado` cru, porque é corrupção de servidor e não pode virar 400
+culpando o cliente. O acúmulo registra no máximo um `CampoInvalido` por termo,
+porque `CampoInvalido.String()` é copiado para o `razoes` da resposta HTTP
+(`rotas/rotasutil/rotasutil.go:36`) e 50 blocos ruins não podem render 50
+razões idênticas. `Validar` NÃO confere `Confianca` nem `Revisoes`, e a
+assimetria está documentada no código como deliberada.
+
+Atomicidade: `AplicarPlano` roda os sete mutadores sobre uma cópia rasa do
+`Documento` com `partesSubstituidas` clonado, e troca o mapa do receptor só
+depois que todos devolvem nil. Se qualquer um recusar, nem o delta da página
+fica. É seguro com cópia rasa porque `Documento` tem só dois campos e toda
+escrita retida passa por `SubstituirParte`, que guarda `bytes.Clone`.
+
+Classificação de `RefXML` negativo, fechada em 08/10: a varredura de duplicata
+ignora ordinais negativos. Dois blocos com `RefXML: -1` são ENTRADA INVÁLIDA
+(`*ErroValidacao` em `ref_xml`, 400), não corrupção — dois `-1` não são dois
+blocos apontando para o mesmo nó, são dois ordinais inválidos. Isso também
+alinhou `Validar` com `Fallback.Aplicar` (`fallback.go:78-83`), que classificava
+o mesmo índice como 400 enquanto `Validar` devolvia 500. Duplicata continua
+vencendo papel/origem inválidos quando os RefXML são válidos e repetidos.
+
+**Evidência em 08/10/2026 07:13, dir `backend`:** `go build && go vet &&
+gofmt -l .` PASS; `golangci-lint run ./...` 0 issues; `go test ./... -race
+-count=1` exit 0, 34 pacotes ok, nenhum FAIL, panic ou DATA RACE
+(`domain/cdm` 1.046s, `domain/formatador` 1.027s, `infra/ooxml` 58.750s,
+`internal/arquitetura` 1.269s). Cobertura de statements com suíte verde:
+`domain/formatador` 100%, `domain/cdm` 95,0%, mínimo do domínio 93,8%. O lint reprovou na PRIMEIRA execução com 6 issues `errorlint` no helper
+anti-vazamento dos testes; o helper varre todos os elos da cadeia de `Unwrap`
+e `errors.As` pararia no primeiro match, então foram anotadas 6
+`//nolint:errorlint` estreitas, em vez de excluir `errorlint` dos testes.
+
+**O que isto NÃO é.** Não há caller em produção: nenhuma rota, fila ou storage
+chama `Planejar`/`AplicarPlano`. A superfície é inerte até ser integrada, e as
+revisões de arquitetura e segurança deste recorte não cobrem essa integração.
+Não há perfil normativo: a validação usou ruleset sintético, e nada aqui
+autoriza afirmar conformidade ABNT/Geousp. F3 segue aberta.
+
+### Débitos declarados neste recorte, a pagar ANTES de ligar o worker
+
+- **Regra 3 — sem `context.Context`:** `AplicarPlano` faz I/O sem ctx,
+  consistente com os sete mutadores, que também não o têm. Não é regressão; é
+  débito do pacote. Pôr ctx só no agregador daria cancelamento entre etapas
+  sem propagar para dentro delas, e mudaria assinatura fixada por teste.
+  Corrigir junto com os sete.
+- **Amplificação de leitura:** 7 leituras de `word/document.xml` por chamada
+  (uma por mutador, cada uma com `LimitReader` de 32 MiB) e 14 parses (2 por
+  passe, comportamento preexistente de cada mutador). Dentro do teto, nenhum
+  guarda contornado. Ler e parsear uma vez, reusando a árvore, é o upgrade.
+- **Teto de `Campos` não testado no caminho HTTP:** A19 prova o limite dentro
+  do domínio; que `rotasutil.go:36` não amplifique `razoes` segue sem teste,
+  porque não existe chamador HTTP de `Classificar` neste recorte.
+- **Preexistente, fora do delta:** `validarRevisoes`
+  (`cdm/serializacao.go:193`) só detecta RefXML duplicado quando há revisões, e
+  `Serializar` não chama `Indice.Validar` — um índice com RefXML repetido e sem
+  revisões ainda pode ser persistido. Não alcançável por `Planejar`. Pertence
+  ao recorte de fallback.
+- **Classificação crua vira 500 se o índice passar a vir do cliente**
+  (segurança, BAIXO, capacidade futura): `cdm/serializacao.go` devolve
+  `ErroRefXMLDuplicado` cru, que vira 500 + log nível Error. Hoje correto,
+  porque o índice é montado pelo servidor e `Planejar` não tem chamador. Se um
+  recorte futuro (editor de estrutura, import de CDM) passar índice DO CLIENTE
+  por `Validar`/`Planejar`, duplicata trivial virará 500 e log Error por
+  requisição: ruído de alerta e inversão de culpa, não vazamento. Conserto
+  nesse momento: o chamador de borda envolve em `*ErroValidacao`; o sentinela
+  cru fica só para leitura do banco.
+- **A20 não prova fonte única, só texto igual** (validador): um teste em
+  runtime não distingue constante de literal com o mesmo texto. A20 é
+  regressão de texto. A prova de fonte única seria estática.
+- **Quarta cópia de literal:** `documento/service/estrutura.go:43` repete o
+  texto de `mensagemPapelDesconhecido` para o MESMO predicado
+  (`papel.Valido()`), e as constantes de `cdm` são não exportadas: editar a
+  constante deixa esse caminho HTTP divergente em silêncio, e o teste de
+  regressão não vê. Conserto proposto: exportar `cdm.ValidarPapel(Papel) error`
+  devolvendo o erro canônico, seguindo o idioma que o projeto já usa em
+  `ruleset.ValidarAlinhamento`/`ValidarEntrelinha`/`ValidarRecuoCM`. É outro
+  recorte — `estrutura.go` não estava autorizado aqui, e a quarta cópia é
+  ANTERIOR a este recorte. Dentro de `cdm`, `bloco.go` e `serializacao.go` já
+  compartilham as constantes.
+
+## Medição de 07/10 — fonte e tamanho diretos nos runs
+
+`Documento.AplicarTipografia` grava rFonts (ascii/hAnsi/eastAsia/cs) e sz/szCs
+nos runs de texto diretos dos parágrafos selecionados. `Corpo.Fonte` e
+`Corpo.TamanhoPT` usam validadores isolados e a conversão existente de pontos
+para meios-pontos. A mutação preserva texto/histórico/partes não alvo e recusa
+atributos de tema concorrentes, homônimos sem namespace e parágrafos com texto
+em wrappers inline ainda não suportados. Não publica valores ABNT/Geousp nem
+garante fonte instalada ou aparência visual. Spec `f3-tipografia-direta-runs`
+concluída como componente.
+
+Teste focal com `-race` inicialmente encontrou aceitação indevida de NBSP em
+`w:rPr` e nos elementos rFonts/sz/szCs; os quatro casos foram corrigidos e o
+focal final passou (ruleset 1.023s, OOXML 1.526s). Primeiro gate global parou
+em errorlint no teste, também corrigido. Fechamento final: build/vet/gofmt,
+`golangci-lint` 0 issues e suíte global com `-race` PASS (OOXML 90.211s).
+Revisões finais estáticas de arquitetura e segurança aprovaram o delta após
+as correções. Sem integração ponta a ponta ou validação visual.
+
+## Medição de 07/10 — espaçamento direto antes/depois
+
+`Documento.AplicarEspacamentoAntes/Depois` grava somente `w:before` ou
+`w:after` no parágrafo selecionado, com conversão de pontos para twips pelo VO
+existente. Preserva o lado oposto, entrelinha, propriedades de espaçamento
+automático, estilos, histórico e partes ZIP não alvo. É gravação direta: herança
+e `contextualSpacing` podem mudar o espaço visual. Spec
+`f3-espacamento-direto-paragrafo` concluída. Teste focal com `-race` PASS
+(OOXML 1.121s); build/vet/gofmt, lint sem issues e suíte global com `-race`
+PASS (OOXML 49.375s). Revisões estáticas de arquitetura e segurança aprovadas.
+Não houve RED: o primeiro teste foi criado após o código. Sem fluxo de
+formatação ponta a ponta ou validação visual.
+
+## Medição de 07/10 — recuo da primeira linha
+
+`Documento.AplicarRecuoPrimeiraLinha` e `ruleset.ValidarRecuoCM` concluídos
+como componente; preflight de propriedades diretas, `docDefaults` e cadeia de
+estilos ativa. Teste focal com `-race` e suíte global com `-race` PASS; build,
+vet, gofmt e lint limpos. Evidências exatas e revisões em `docs/retomada.md`.
+
+## Planejamento de 05/10 — recuo com verificação de herança
+
+Spec `f3-recuo-primeira-linha-preflight` pronta para TDD, com pré-auditoria de
+arquitetura/segurança e reauditorias aprovadas. Ainda não implementada:
+nenhum novo teste/RED ou mutador de recuo nesta rodada.
+Contrato examina propriedades e estilos ativos, rejeita conflitos sem alterar
+estilos compartilhados e restringe leitura de relacionamentos OPC, sem rede.
+Testes planejados separam decisões por rota; detalhes na spec e plano seção05/10.
+
+Verificador estrutural, sincronização de instruções e diffcheck limpos;
+build/vet/gofmt do backend limpos. Suíte global não repetida nesta rodada documental.
+Última medição funcional continua a de04/10 abaixo. F3 permanece em andamento.
+
+## Medição de 04/10 — entrelinha direta
+
+`Documento.AplicarEntrelinha` altera somente line/lineRule=auto dos alvos;
+validação contextual compartilhada no domínio, caminho lexical compartilhado
+com alinhamento. Mantém espaço antes/depois, histórico, texto e partes não-alvo.
+Sem recuos, fonte, estilos, perfis ou integração HTTP/worker de formatação.
+
+- RED por APIs ausentes; focal race final PASS25.601s OOXML/1.041s ruleset.
+  Principal corrigiu expectativa incorreta da fixture de tabela e assumiu execução
+  dos testes deixados pelo agente, sem inferir aprovação não recebida.
+- Build/vet/gofmt limpos; lint0issues; global race PASS (OOXML88.636s).
+  Ruleset com suíte completa:98.2% de cobertura.
+- Pré-auditoria e revisão de código aprovadas. Segurança confirmou risco médio
+  herdado de buffers agregados com aliases longos; guarda incremental corrigida
+  e reauditoria aprovada. Perfil focal prova ramo de rejeição executado1vez.
+- Não medido RSS total nem visual em Word/LibreOffice; sem novos containers/E2E.
+  Grade de documento e herança integral continuam fora do contrato.
+  Skills orientaram preservação e reuso; nenhuma consulta Jev foi necessária.
+
+## Medição de 03/10 — alinhamento direto de parágrafos
+
+`Documento.AplicarAlinhamento` concluído: quatro valores validados no domínio,
+seleção por ordinais compatíveis com ExtrairBlocos, edição localizada de jc,
+preservação de texto/histórico/partes não-alvo e rejeição atômica de ambiguidades.
+Não inclui entrelinha, recuos, fonte, styles.xml ou integração ao fluxo HTTP/worker.
+
+- RED por APIs ausentes confirmado; focal race GREEN pelo testador.
+- Global `go test ./... -race -count=1` PASS (OOXML71.692s, VO10.195s).
+  Após delta somente de teste, regressão de namespace entre irmãos PASS1.028s.
+- Build/vet/gofmt limpos e lint0issues, repetidos após o último delta de teste.
+  Suíte completa de ruleset: cobertura98.0%.
+- Pré-auditoria da spec e revisões finais de código/segurança aprovadas.
+  Limite de expansão é calculado antes do buffer final. Teste de isolamento de
+  namespace fecha a sugestão baixa registrada no componente de página/margens.
+- Sem containers/E2E/inspeção visual. Sem nova consulta Jev, regra determinística.
+  Skills de spec, OOXML e normas delimitaram contratos/preservação; simplificação
+  manteve parser/editor compartilhados, sem dependências novas.
+
+## Medição de 03/10 — página/margens OOXML
+
+`Documento.AplicarPagina` concluído com preservação lexical/partes não-alvo,
+seções correntes, histórico intocado, atomicidade e idempotência. Sem norma
+publicada, endpoint, worker de formatação ou PDF novo. Skills locais orientaram
+spec, invariantes OOXML e proibição de inventar valores normativos.
+
+- Build/vet/gofmt globais limpos; lint0issues; global `go test ./... -race -count=1`
+  PASS no snapshot final (OOXML62.032s). Ruleset cobertura97.9%.
+- Validador aprovou estática. Segurança detectou amplificação por namespaces,
+  corrigida com escopos compartilhados e limites de nós/atributos/declarações;
+  regressão RED→GREEN e reauditoria aprovados. Detalhes técnicos no plano.
+- Sem medição visual ou integrações com containers neste recorte.
+  Não é conformidade normativa nem validação XSD integral.
+  Sugestão baixa de isolamento de namespaces entre irmãos atendida pelo recorte
+  de alinhamento acima, usando o mesmo parser.
+
+## Medição de 29/09 — fallback Jev experimental
+
+Porta no CDM, política de confiança, adaptador HTTP TypeSafe e ligação no worker.
+Flag `JEV_HABILITADO` desligada por padrão. Alta confiança aplica; média sugere
+confirmação; baixa/sem correspondência/falha pede revisão, preservando o papel.
+Sugestões persistem no CDM v1 e saem no GET/PATCH; correção manual remove a
+pendência do alvo com o controle de dono e concorrência já existente.
+
+- RED inicial confirmado em domínio, DTO, adaptador e configuração por símbolos
+  ausentes. Regressão adicional RED: probabilidade JSON null era aceita como
+  zero; corrigida com validação de presença, focal GREEN.
+- `go test ./... -race -count=1` PASS global (OOXML 37,460s, VO 20,747s).
+  Após a correção null, focal llm PASS em 1,089s, cobertura 90,8%.
+  Config focal race PASS em 1,042s, cobertura 91,6%.
+- Build/vet/gofmt globais PASS; lint final após arquivos estabilizados: 0 issues.
+  Teste independente CDM race: 1,069s, cobertura 94,0%. Segurança aprovou o
+  snapshot sem críticos/altos. Riscos médios: privacidade dos trechos enviados
+  e dívida anterior de recuperação se o contexto do worker for cancelado antes
+  de MarcarFalha. Timeout HTTP sozinho degrada para revisão com contexto pai vivo.
+- Sem inferência externa real, sem benchmark de precisão e sem novos E2E com
+  containers. Limiares são experimentais. F5 completa ainda exige calibração,
+  cache, métrica de tokens e teto monetário; detalhe no plano.
+- Backend apenas: dados de confirmação disponíveis, tela ainda não implementada.
+
+## Medição de 29/09 — suporte a partes alteradas
+
+Implementado `Documento.SubstituirParte`, salvamento do delta e extração coerente.
+No-op integral preservado; novo contrato na seção F3 de `plano-backend.md`.
+Ainda não é o mutador de página nem fluxo de formatação ponta a ponta.
+
+- RED confirmado por método ausente antes da implementação.
+- `go test ./... -race -count=1`: PASS global; OOXML 19,067s, VO 11,082s.
+- Após último ajuste nominal no teste: build/vet/gofmt limpos, lint `0 issues` e
+  teste focal de falha de escrita/close com race PASS (1,055s).
+- Segurança aprovou o delta por revisão estática. Validador não achou defeito
+  funcional; pediu nomes expressivos no helper de teste e remoção de campos ZIP
+  deprecated. Ambos corrigidos; lint/focal conferidos após correção.
+- Integrações com containers e inspeção Word/LibreOffice não repetidas neste
+  recorte de bytes. O limite de deltas não substitui validação geral do pacote.
+- Testes de arquitetura corrigidos para analisar stdout de `go list` separado
+  de avisos em stderr, evitando falso negativo com cache frio.
 
 ## Refatoração de 27/09 — auditoria do backend inteiro
 

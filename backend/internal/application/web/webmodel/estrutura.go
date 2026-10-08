@@ -38,6 +38,22 @@ type BlocoResposta struct {
 // EstruturaResposta é o CDM de um documento, na ordem do corpo. A versão
 // acompanha a resposta para o frontend saber qual formato está lendo.
 type EstruturaResposta struct {
-	Versao int             `json:"versao"`
-	Blocos []BlocoResposta `json:"blocos"`
+	Versao   int                        `json:"versao"`
+	Blocos   []BlocoResposta            `json:"blocos"`
+	Revisoes []RevisaoEstruturaResposta `json:"revisoes,omitempty"`
+}
+
+// RevisaoEstruturaResposta é uma sugestão de classificação pendente de ação.
+type RevisaoEstruturaResposta struct {
+	RefXML        int                    `json:"ref_xml"`
+	PapelSugerido *PapelSugeridoResposta `json:"papel_sugerido,omitempty"`
+	Confianca     float64                `json:"confianca"`
+	Acao          string                 `json:"acao"`
+	Motivo        string                 `json:"motivo,omitempty"`
+}
+
+// PapelSugeridoResposta preserva também o nível dos papéis de seção.
+type PapelSugeridoResposta struct {
+	Nome  string `json:"nome"`
+	Nivel int    `json:"nivel,omitempty"`
 }

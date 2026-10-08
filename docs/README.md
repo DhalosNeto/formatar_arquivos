@@ -1,16 +1,17 @@
 # Documentação do Formatador Acadêmico
 
-Índice de entrada. Se você chegou agora, leia nesta ordem.
+Índice de entrada. Leia as instruções e a retomada primeiro; use os demais
+arquivos por assunto, sem carregar a documentação inteira em cada agente.
 
 ## Comece aqui
 
 | # | Arquivo | Responde |
 |---|---|---|
 | 1 | [`../CLAUDE.md`](../CLAUDE.md) | as regras do projeto — arquitetura, nomes, erros, testes. **É normativo**, não sugestão |
-| 2 | [`estado-do-backend.md`](estado-do-backend.md) | em que pé está cada fase e o que existe de verdade, com data de cada medição |
-| 3 | [`plano-backend.md`](plano-backend.md) | o que falta, por fase, e o critério de pronto de cada uma |
-| 4 | [`mapa-modulos.md`](mapa-modulos.md) | onde algo mora. `grep -i "<assunto>" docs/mapa-modulos.md` antes de varrer o repositório |
-| 5 | [`retomada.md`](retomada.md) | onde a última sessão parou e qual é a próxima tarefa |
+| 2 | [`retomada.md`](retomada.md) e [`spec-ativa.json`](spec-ativa.json) | checkpoint e contrato do recorte atual |
+| 3 | [`mapa-modulos.md`](mapa-modulos.md) | localizar o assunto com `rg` antes de abrir arquivos |
+| 4 | [`estado-do-backend.md`](estado-do-backend.md) | estado medido por data; consultar o recorte relevante |
+| 5 | [`plano-backend.md`](plano-backend.md) | fase, decisões duráveis e critério de pronto |
 
 Vai mexer no **frontend**? Só [`contrato-api.md`](contrato-api.md) importa. Ele é
 escrito para quem consome a API e não pressupõe conhecimento do backend.
@@ -23,9 +24,26 @@ escrito para quem consome a API e não pressupõe conhecimento do backend.
 | [`adr/0001-docx-in-place.md`](adr/0001-docx-in-place.md) | por que o motor muta o DOCX em vez de reconstruí-lo. **Leia antes de tocar em OOXML** |
 | [`adr/0002-fila-sem-river.md`](adr/0002-fila-sem-river.md) | por que a tabela `jobs` é a própria fila, sem broker externo |
 
-Contratos por recorte — schema de ruleset, conversão de unidades, correção de
-estrutura — vivem em `plano-backend.md` e `mapa-modulos.md`, não em fichas
-separadas. Ficha por recorte multiplica arquivos e envelhece sem ninguém notar.
+Contratos duráveis vivem no plano e no código, localizados pelo mapa. A spec
+operacional é um único JSON reutilizável; não crie fichas MD por recorte.
+
+## Workflow compartilhado
+
+As regras comuns de contexto, quota, compactação e delegação estão em
+`CLAUDE.md`; os seis papéis em `.claude/agents/`. As cópias Codex são geradas.
+As skills têm fonte em `.agents/skills/` e links para descoberta pelo Claude,
+evitando manter o mesmo texto duas vezes. Nenhum MD novo por sessão.
+
+Peça **“use spec-verificavel para definir o próximo recorte”**. A skill em
+`../.agents/skills/spec-verificavel/SKILL.md` gera/revisa a spec ativa e executa:
+
+```sh
+python3 .agents/skills/spec-verificavel/scripts/verificar_spec.py docs/spec-ativa.json
+```
+
+Isso confere estrutura, caminhos e vínculos sem executar comandos da spec.
+Autoverificação não substitui testes nem revisão independente. Uma execução
+realista da skill também deve ser conferida antes de confiar no workflow.
 
 ## O que NÃO é fonte de verdade
 

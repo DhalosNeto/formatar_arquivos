@@ -200,7 +200,157 @@ este documento, seção F3. Schema, loader estrito e CLI validar implementados e
 testados. Seed imutável e comando semear implementados em 27/09;
 mutadores e endpoints ainda pendentes. Evidências finais na retomada do seed.
 
-### Pré-requisito que não é código
+### Contrato do recorte de página/margens — 30/09/2026
+
+Spec concluída `f3-pagina-margens`: `Documento.AplicarPagina(ruleset.Pagina,
+MargensComplementares)`. As quatro margens e dimensões usam os conversores
+existentes. Complementos explícitos em twips preenchem apenas header/footer/gutter
+ausentes; atributos existentes são preservados. Nenhum valor desta API representa
+uma regra ABNT ou Geousp.
+
+Alteração lexical localizada em seções correntes diretas de body e p/pPr,
+com criação da seção final se ausente, preservando histórico de alterações.
+Preparar todas as edições antes de substituir document.xml; repetir deve ser
+idempotente. Caminhos correntes não suportados são recusados, nunca ignorados.
+Preservar prefixos, texto, comentários, declaração e partes ZIP não-alvo.
+Sem validação XSD integral ou promessa de suportar qualquer DOCX.
+
+Limites defensivos do mutador: XML de entrada e saída até 32 MiB, profundidade
+256, 100000 elementos, 128 atributos por elemento e 1024 declarações de namespace
+no documento. Escopos de namespace são compartilhados de forma imutável, com cópia
+apenas quando há declaração local. Excesso é rejeitado sem gravar delta.
+Filhos desconhecidos não recebem validação XSD completa; seções correntes fora
+dos caminhos suportados são recusadas. Não há validação visual Word/LibreOffice
+neste recorte de componente.
+
+A ordem pgSz antes de pgMar foi conferida no
+[schema do Open XML SDK](https://github.com/dotnet/Open-XML-SDK/blob/main/data/schemas/schemas_openxmlformats_org_wordprocessingml_2006_main.json).
+O teto de dimensão 31680 twips é compatibilidade do
+[Word para pgSz](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oi29500/e7017520-06b4-438f-97d2-3e49f247ca9f).
+As margens auxiliares obrigatórias são descritas nas
+[notas de implementação pgMar](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oe376/5a1cdacc-ee75-4453-8118-de48e5e370d6).
+
+Consulta real ao Jev em 30/09: recomendou edição local entre alternativas
+fechadas, modelo jev-1.13.0, confiança 1,0, 552 tokens de entrada e 57 de saída.
+Somente resumo técnico foi enviado. A recomendação não substitui schema/testes.
+
+Em 02/10, nova consulta autorizada com resumo técnico sem código/documentos:
+Jev-1.13.0 recomendou rejeição atômica de estruturas ambíguas ou não suportadas,
+em vez de ignorá-las ou normalizar o XML inteiro (confiança 1,0;
+444 tokens de entrada e 62 de saída). A decisão é aplicada por validações
+determinísticas e testes; confiança do modelo não é evidência de correção.
+
+### Recorte de alinhamento direto — 03/10/2026
+
+Componente implementado: `Documento.AplicarAlinhamento(referencias []int, alinhamento string)`.
+As referências seguem os ordinais de `ExtrairBlocos`, incluindo tabelas na contagem,
+mas cada alvo precisa ser parágrafo direto do corpo. O chamador escolhe os papéis
+do CDM; este adaptador não decide quem recebe formatação nem autoriza usuários.
+Esquerda/direita/centralizado/justificado são validados no domínio e convertidos
+para left/right/center/both na infraestrutura. Sem mexer no contrato YAML/JSON.
+
+Somente `w:jc` direto é alterado/criado; `pPr` ausente é criado primeiro.
+Filhos de propriedades desconhecidos, duplicados ou fora de ordem nos alvos são
+recusados. Texto, estilos nomeados, histórico, parágrafos fora da seleção e partes
+não-alvo ficam intactos. Não implementa entrelinha/recuo/fonte nem avaliação global
+de herança; o alinhamento direto tem sua semântica própria.
+Preservar limites do parser e verificar expansão antes de montar o buffer final.
+Spec `f3-alinhamento-paragrafos` concluída com pré-auditoria, TDD e revisões finais
+independentes. Global race PASS (OOXML71.692s); último delta somente de teste
+validado focalmente (namespace entre irmãos1.028s). Build/vet/gofmt/lint limpos.
+Sem inspeção visual ou integração de formatação ponta a ponta; entrelinha/recuos
+e fonte/tamanho são próximos recortes, com análise de overrides/herança.
+
+Fontes técnicas consultadas:
+[w:jc](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.wordprocessing.justification),
+[valores](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.wordprocessing.justificationvalues) e
+[CT_PPr, ordem dos filhos](https://github.com/dotnet/Open-XML-SDK/blob/main/data/schemas/schemas_openxmlformats_org_wordprocessingml_2006_main.json).
+
+### Recorte de entrelinha direta — 04/10/2026
+
+Spec `f3-entrelinha-direta`: `Documento.AplicarEntrelinha(referencias []int, multiplo float64)`.
+Somente `spacing/@line` e `@lineRule=auto` nos parágrafos diretos selecionados.
+Conversão existente de múltiplo em unidades de 240, com resultado positivo.
+Preservar before/after, suas variantes, histórico, estilos e partes não-alvo.
+Compartilhar o caminho lexical de alinhamento, com ordem CT_PPr, limites e
+atomicidade; não criar outro parser. Recuos/espaço antes-depois/fontes ficam
+para recortes posteriores. Não promete efeito visual integral de snapToGrid/docGrid.
+Concluído em04/10: focal race e global race aprovados (OOXML global88.636s),
+build/vet/gofmt/lint limpos. Pré-auditoria e revisões finais aprovadas.
+Proteção adicional limita textos de edição acumulados a32MiB durante preparo,
+evitando amplificação por alias longo; não representa limite de RSS do processo.
+Sem verificação visual ou fluxo ponta a ponta. Evidências na spec/estado/retomada.
+
+Fonte técnica: [SpacingBetweenLines.Line](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.wordprocessing.spacingbetweenlines.line?view=openxml-3.0.1).
+Não é valor normativo de revista; a ambiguidade Geousp abaixo continua pendente.
+
+### Próximo recorte: recuo simples com verificação de herança — 05/10/2026
+
+Planejamento, ainda sem mutador entregue. `Corpo.RecuoCM` será recuo adicional
+de primeira linha; não muda recuos laterais. Não basta gravar `firstLine`:
+`hanging` e variantes em caracteres podem prevalecer por herança.
+O recorte inicial recusará atomicamente conflitos nos níveis ativos, inclusive
+valores zero, sem zerar/remover atributos ou alterar estilos compartilhados.
+Essa recusa é conservadora, não uma declaração de que o arquivo é inválido.
+
+Verificar propriedades diretas, docDefaults e cadeia basedOn do estilo selecionado;
+estilo padrão de parágrafo só quando não há pStyle explícito. Não rejeitar por
+um estilo não utilizado conter recuos conflitantes. Numeração ativa, cadeia
+ausente/cíclica ou além do limite, ambiguidade estrutural e relacionamentos de
+estilos não suportados devem falhar antes de qualquer substituição. Parte externa
+nunca deve ser buscada; não inferir ausência de estilo sem conferir relacionamentos.
+Spec ativa `f3-recuo-primeira-linha-preflight` pronta para TDD após pré-auditoria
+e reauditorias de arquitetura/segurança. C1-C5/A1-A17 separam decisões por rota;
+nenhum mutador/teste de recuo foi implementado nesta rodada.
+
+Fontes técnicas: [Indentation e herança por atributo](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.wordprocessing.indentation?view=openxml-3.0.1),
+[MS-OI29500, variantes por caractere](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oi29500/138732dc-507a-4164-af66-808c2fd9f2f9).
+Há LibreOffice local disponível, mas ainda não foi executada caracterização visual
+de recuos. Não converter leitura de especificação em evidência de renderização.
+
+### Atualização de F3 — 07/10/2026
+
+O recuo da primeira linha planejado em 05/10 foi concluído como componente,
+com preflight de conflitos diretos e herdados; evidências em
+`docs/retomada.md`. O recorte seguinte, `f3-espacamento-direto-paragrafo`,
+entregou `Documento.AplicarEspacamentoAntes` e `AplicarEspacamentoDepois`.
+Cada operação grava apenas `w:before` ou `w:after` em twips nos parágrafos
+selecionados. Reutiliza o editor lexical e o conversor de pontos existentes;
+preserva estilos, propriedades paralelas e partes não alvo. Testes focais,
+suíte global com `-race`, build, vet, gofmt e lint passaram em 07/10.
+
+Este componente garante o atributo direto armazenado. `beforeAutospacing`
+pode fazer o editor ignorar `before` e `contextualSpacing` pode reduzir o
+espaçamento entre parágrafos do mesmo estilo; as propriedades podem vir da
+hierarquia de estilos. A verificação da distância visual efetiva pertence à
+integração do motor e à validação de documento renderizado.
+Fontes técnicas: [BeforeAutoSpacing](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.wordprocessing.spacingbetweenlines.beforeautospacing?view=openxml-3.0.1),
+[ContextualSpacing](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.wordprocessing.contextualspacing?view=openxml-3.0.1).
+
+### Tipografia direta dos runs — 07/10/2026
+
+Spec `f3-tipografia-direta-runs` concluída. `Documento.AplicarTipografia`
+aplica fonte e tamanho em `w:rPr` dos runs de texto filhos diretos dos
+parágrafos selecionados do corpo principal. A fonte é gravada nos quatro
+canais de `w:rFonts`; o tamanho em meios-pontos em `w:sz` e `w:szCs`.
+Valores de fonte passam por validação XML 1.0 e escape de atributos.
+O mutador recusa temas concorrentes, homônimos sem namespace, estrutura
+`w:rPr` ambígua e texto em wrappers inline como hyperlink. Não altera
+estilos, tabelas, notas, histórico nem partes não alvo. Essas recusas
+conservadoras ficam explícitas para a futura integração do motor.
+
+Testes de componente, build/vet/gofmt, lint e suíte global com `-race`
+passaram em 07/10; revisões estáticas independentes aprovaram após corrigir
+quatro casos de whitespace NBSP que os testes encontraram. Evidências em
+`docs/spec-ativa.json` e `docs/estado-do-backend.md`. Não há fluxo de
+formatação ponta a ponta nem equivalência visual verificada. A família de
+fonte pode não estar instalada no editor; os valores normativos continuam
+pendentes de fonte oficial antes de publicar um perfil ABNT/Geousp.
+Fontes técnicas: [RunFonts](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.wordprocessing.runfonts?view=openxml-3.0.1),
+[szCs](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.wordprocessing.fontsizecomplexscript?view=openxml-3.0.1),
+[caracteres válidos em XML 1.0](https://www.w3.org/TR/xml/#charsets).
+
+### Pré-requisito normativo
 
 **`backend/rulesets/` contém o schema técnico, mas nenhum perfil normativo publicado.**
 Antes de publicar um perfil, alguém precisa preencher os valores da
@@ -249,6 +399,39 @@ meios-pontos (2, para tamanho de fonte) e entrelinha → unidades (240, para
 recusados antes de arredondar, e teto técnico int32 conferido inclusive durante
 a multiplicação. **Esse teto é técnico e não equivale ao limite de cada atributo
 OOXML** — os limites contextuais ficam na validação do ruleset.
+
+### Contrato do suporte a partes alteradas — 29/09/2026
+
+Pré-aprovado por validador e segurança; implementação e evidências são
+registradas em `estado-do-backend.md`. Este suporte precede os mutadores XML.
+
+`(*ooxml.Documento).SubstituirParte(nome string, conteudo []byte) error` aceita
+bytes opacos para uma parte existente, única e não diretório. Nome é comparado
+exatamente, sem normalização; caminhos absolutos, unidade Windows, barra
+invertida, NUL e segmentos vazios/`.`/`..` são recusados. Receptor nil devolve
+erro de argumento nulo. Demais rejeições usam erro de validação com mensagem fixa.
+
+Nil e slice vazio substituem por zero bytes, sem excluir a entrada. Os bytes
+são copiados defensivamente após validação. Cada conteúdo e a soma dos deltas
+retidos têm teto de 250 MiB, reutilizando o limite de domínio; uma troca desconta
+o delta anterior. Isso não limita o pico de memória nem valida o pacote inteiro.
+Rejeição mantém o estado anterior; a mesma instância não admite uso concorrente.
+O ReaderAt original deve permanecer disponível e imutável até terminar o uso.
+
+Salvar mantém ordem e `zip.Writer.Copy` nas partes intactas. Alteradas usam
+`CreateHeader`, apenas Store/Deflate, recalculando CRC e tamanhos. Cabeçalho e
+Extra são copiados: timestamps DOS e extras existentes permanecem; Modified é
+zerado na cópia para não acrescentar timestamps repetidos. Apenas extras ZIP64
+obsoletos são removidos. Extra truncado é recusado antes de aceitar substituição.
+Falhas de escrita/finalização usam erro de aplicação fixo; o destino pode ficar
+parcial e deve ser descartado, mas o delta permanece para nova tentativa.
+
+`ExtrairBlocos` lê o último delta aceito, inclusive vazio. Não há validação nem
+reescrita XML na substituição; o parser continua responsável pela extração.
+Testes de no-op preservam igualdade integral; novos casos com delta exigem
+preservação das partes não-alvo, metadados, texto quando não alterado pelo
+chamador e salvamento repetido determinístico. O mutador de página permanece
+um recorte separado.
 
 ### O que entra
 
@@ -338,15 +521,35 @@ quebram parser ingênuo. Cada caso real vira fixture.
 
 ### O que entra
 
-Cliente Anthropic com **structured outputs** (JSON Schema) devolvendo
-`[]{block_id, role, confidence}`, atrás da interface
-`domain/formatador.ClassificadorEstrutura`.
+Recorte Jev antecipado por pedido do usuário em 29/09/2026: porta
+`domain/cdm.ClassificadorEstrutura` e adaptador HTTP TypeSafe com Choice.
+O worker o injeta quando `JEV_HABILITADO=true`; o padrão é desligado.
+As variáveis `LLM_*`/Anthropic são legadas e não ativam este adaptador.
 
-Entra **só** nos blocos onde a heurística ficou abaixo do limiar. Envia apenas os
-primeiros ~200 caracteres de cada bloco candidato mais features estruturais —
-**nunca o documento inteiro**.
+Entra nos blocos abaixo de `JEV_LIMITE_CONSULTA` (0,7), exceto origens usuário
+e LLM. Até 32 candidatos por documento, uma chamada, trechos do CDM
+(normalmente até 200 caracteres; limite defensivo do adaptador: 500 runes),
+papel atual e nível. Sem arquivo, credenciais de sessão ou identificador do
+documento no payload. Os demais candidatos vão para revisão.
 
-Cache por hash de bloco, teto de custo por job, métrica de tokens.
+Confiança >= `JEV_LIMITE_AUTOMATICO` (0,95) aplica o papel com origem LLM;
+>= `JEV_LIMITE_CONFIRMACAO` (0,7) preserva a classe atual e sugere confirmação;
+abaixo disso ou sem correspondência solicita revisão. Limites são experimentais,
+sem calibração em artigos reais. Confiança descreve a distribuição de escolhas,
+não comprova correção. Falha externa mantém o CDM determinístico e registra
+revisão; cancelamento interrompe o trabalho.
+
+Destino fixo HTTPS TypeSafe, prazo de 15s, resposta até 256 KiB, sem retries
+automáticos ou redirects. Habilitar autoriza envio dos trechos ao provedor;
+trecho limitado ainda pode conter dados pessoais. Não habilitar para documentos
+reais sem política de privacidade apropriada. Testes usam transporte/fakes locais.
+
+As sugestões são aditivas no JSON v1, em `revisoes`, e aparecem no GET/PATCH
+de estrutura. A correção manual existente confirma ou substitui o papel e
+remove a revisão do alvo, com o mesmo dono/status/CAS.
+
+Pendentes para fechar F5: calibração, cache por hash de bloco, teto monetário
+por job e métricas de tokens. Limite de candidatos não é teto de custo em moeda.
 
 `relatorios_mudanca`: o que foi alterado, por quê, e com que origem.
 

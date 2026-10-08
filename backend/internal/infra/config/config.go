@@ -25,6 +25,7 @@ type Config struct {
 	Conversor   Conversor
 	Telemetria  Telemetria
 	LLM         LLM
+	Jev         Jev
 }
 
 // Postgres configura a conexão com o banco.
@@ -101,7 +102,12 @@ func lista(nome string) []string {
 
 // Carregar monta a configuração a partir do ambiente e valida o que é obrigatório.
 func Carregar() (Config, error) {
+	jev, err := carregarJev()
+	if err != nil {
+		return Config{}, err
+	}
 	cfg := Config{
+		Jev:         jev,
 		Porta:       texto("PORTA", "8080"),
 		Ambiente:    texto("AMBIENTE", AmbienteDesenvolvimento),
 		NivelLog:    texto("NIVEL_LOG", "info"),

@@ -22,6 +22,9 @@ const (
 	mensagemIndiceIlegivel     = "o cdm não está num formato legível"
 	mensagemVersaoIncompativel = "o cdm está num formato de versão incompatível"
 	mensagemIndiceCorrompido   = "cdm do documento está corrompido"
+	mensagemBlocoInvalido      = "bloco do cdm inválido"
+	mensagemOrigemDesconhecida = "origem de classificação desconhecida"
+	mensagemRefXMLNegativo     = "a referência ao nó XML é um índice ordinal, nunca negativo"
 )
 
 // papelJSON é a forma persistida de um Papel. Objeto, e não string composta
@@ -75,8 +78,9 @@ type blocoJSON struct {
 // entity.ValidarCDM recusa qualquer coisa que não comece com "{", então um
 // array cru de blocos não poderia ser persistido.
 type envelopeJSON struct {
-	Versao int         `json:"versao"`
-	Blocos []blocoJSON `json:"blocos"`
+	Versao   int                `json:"versao"`
+	Blocos   []blocoJSON        `json:"blocos"`
+	Revisoes []RevisaoEstrutura `json:"revisoes,omitempty"`
 }
 
 // ErroRefXMLDuplicado marca um índice com dois blocos apontando para o mesmo
@@ -109,8 +113,9 @@ func ErroIndiceCorrompido(causa error) error {
 // Indice é o CDM inteiro: o índice semântico de um documento, na ordem do
 // corpo. É isto que vai para documentos.cdm_jsonb.
 type Indice struct {
-	Versao int     `json:"versao"`
-	Blocos []Bloco `json:"blocos"`
+	Versao   int                `json:"versao"`
+	Blocos   []Bloco            `json:"blocos"`
+	Revisoes []RevisaoEstrutura `json:"revisoes,omitempty"`
 }
 
 // NovoIndice monta o índice já carimbado com a versão do formato corrente.
@@ -120,6 +125,9 @@ func NovoIndice(blocos []Bloco) Indice {
 
 // Serializar produz o JSON que vai para a coluna cdm_jsonb.
 func (i Indice) Serializar() ([]byte, error) {
+	if err := validarRevisoes(i.Blocos, i.Revisoes); err != nil {
+		return nil, err
+	}
 	// Fatia vazia e não nula: `"blocos": null` obrigaria todo leitor a
 	// distinguir nulo de vazio, e um documento sem blocos classificados é
 	// uma lista vazia, não uma ausência.
@@ -132,7 +140,7 @@ func (i Indice) Serializar() ([]byte, error) {
 		blocos = append(blocos, blocoJSON(bloco))
 	}
 
-	dados, err := json.Marshal(envelopeJSON{Versao: i.Versao, Blocos: blocos})
+	dados, err := json.Marshal(envelopeJSON{Versao: i.Versao, Blocos: blocos, Revisoes: i.Revisoes})
 	if err != nil {
 		return nil, errors.Envolver(err, "ao serializar o cdm")
 	}
@@ -175,6 +183,108 @@ func Desserializar(dados []byte) (Indice, error) {
 		}
 		blocos = append(blocos, bloco)
 	}
+	if err := validarRevisoes(blocos, envelope.Revisoes); err != nil {
+		return Indice{}, err
+	}
 
-	return Indice{Versao: envelope.Versao, Blocos: blocos}, nil
+	return Indice{Versao: envelope.Versao, Blocos: blocos, Revisoes: envelope.Revisoes}, nil
+}
+
+func validarRevisoes(blocos []Bloco, revisoes []RevisaoEstrutura) error {
+	blocosPorRef := make(map[int]Bloco, len(blocos))
+	for _, bloco := range blocos {
+		if len(revisoes) > 0 {
+			if _, existe := blocosPorRef[bloco.RefXML]; existe {
+				return errors.NovoErroValidacao("revisoes", "há referências de bloco duplicadas junto às revisões")
+			}
+		}
+		blocosPorRef[bloco.RefXML] = bloco
+	}
+	vistas := make(map[int]struct{}, len(revisoes))
+	for _, revisao := range revisoes {
+		bloco, existe := blocosPorRef[revisao.RefXML]
+		motivoValido := revisao.Motivo == "" || revisao.Motivo == motivoClassificadorIndisponivel || revisao.Motivo == motivoRespostaClassificadorInvalida
+		if !existe || bloco.Origem == OrigemUsuario || revisao.RefXML < 0 || !finitoEntreZeroEUm(revisao.Confianca) || (revisao.Acao != acaoConfirmar && revisao.Acao != acaoRevisar) || (revisao.Acao == acaoConfirmar && revisao.PapelSugerido == nil) || (revisao.PapelSugerido != nil && !revisao.PapelSugerido.Valido()) || !motivoValido {
+			return errors.NovoErroValidacao("revisoes", "a estrutura contém revisão inválida")
+		}
+		if _, existe := vistas[revisao.RefXML]; existe {
+			return errors.NovoErroValidacao("revisoes", "a estrutura contém referências de revisão duplicadas")
+		}
+		vistas[revisao.RefXML] = struct{}{}
+	}
+	return nil
+}
+
+// Validar confere TRÊS termos por bloco — papel conhecido, origem conhecida e
+// RefXML não negativo — mais a versão do formato e a ausência de RefXML
+// repetido. Existe porque Indice pode ser montado por literal, sem passar por
+// NovoIndice/NovoBloco — é o caso de quem monta o CDM em memória a partir do
+// pacote OOXML.
+//
+// NÃO confere Confianca nem Revisoes, e a assimetria é deliberada neste
+// recorte: NovoBloco (bloco.go) reprova Confianca fora de 0..1 e
+// Fallback.Aplicar também, mas um Indice montado por literal com
+// Confianca: 42 passa aqui; Serializar valida Revisoes por validarRevisoes, e
+// um Indice pode passar Validar e ainda falhar Serializar. Ampliar os termos
+// exige casos por termo próprios (regra 12), que não estão na spec deste
+// recorte.
+//
+// Ordem das guardas, e ela importa:
+//  1. versão incompatível — interpretar um formato desconhecido é pior que
+//     recusá-lo;
+//  2. RefXML repetido entre QUAISQUER dois blocos de ordinal NÃO NEGATIVO,
+//     independentemente do papel: é corrupção e VENCE bloco inválido,
+//     devolvendo ErroRefXMLDuplicado cru, sem envelope, para que quem lê do
+//     banco reclassifique (ErroIndiceCorrompido) em vez de responder 400
+//     culpando o cliente. A varredura IGNORA RefXML < 0 porque -1 não é nó do
+//     documento: dois blocos em -1 não são dois blocos apontando para o mesmo
+//     nó, são dois ordinais inválidos, e a passagem (3) os recusa em seguida
+//     como entrada inválida — 400, não 500. É também o que mantém esta função
+//     de acordo com Fallback.Aplicar (fallback.go), que confere validade do
+//     bloco antes da duplicata: sem esta condição o MESMO índice virava 500
+//     por aqui e 400 por lá;
+//  3. blocos inválidos, acumulados como entrada inválida (*ErroValidacao).
+//
+// O acúmulo registra NO MÁXIMO um CampoInvalido por termo, por quantos blocos
+// reprovem: CampoInvalido.String() é copiado para `razoes` da resposta HTTP, e
+// 50 blocos de papel zero não podem render 50 razões idênticas.
+//
+// Função pura: sem I/O, sem context.Context, sem log. Nenhuma mensagem cita
+// TextoResumo nem qualquer outro conteúdo do documento (regra 7).
+func (i Indice) Validar() error {
+	if i.Versao != VersaoFormatoCDM {
+		return errors.NovoErroValidacao("versao", mensagemVersaoIncompativel)
+	}
+
+	vistas := make(map[int]struct{}, len(i.Blocos))
+	for _, bloco := range i.Blocos {
+		if bloco.RefXML < 0 {
+			continue
+		}
+		if _, repetido := vistas[bloco.RefXML]; repetido {
+			return ErroRefXMLDuplicado
+		}
+		vistas[bloco.RefXML] = struct{}{}
+	}
+
+	validacao := errors.NovoErroValidacaoCampos(mensagemBlocoInvalido)
+	var papelReprovado, origemReprovada, refXMLReprovado bool
+	for _, bloco := range i.Blocos {
+		if !papelReprovado && !bloco.Papel.Valido() {
+			validacao.Acrescentar("papel", mensagemPapelDesconhecido)
+			papelReprovado = true
+		}
+		if !origemReprovada && !bloco.Origem.Valido() {
+			validacao.Acrescentar("origem", mensagemOrigemDesconhecida)
+			origemReprovada = true
+		}
+		if !refXMLReprovado && bloco.RefXML < 0 {
+			validacao.Acrescentar("ref_xml", mensagemRefXMLNegativo)
+			refXMLReprovado = true
+		}
+	}
+	if validacao.TemCampos() {
+		return validacao
+	}
+	return nil
 }

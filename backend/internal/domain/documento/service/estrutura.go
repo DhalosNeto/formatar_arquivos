@@ -77,6 +77,13 @@ func (s *ServicoEstrutura) Corrigir(ctx context.Context, dono vo.Dono, id uuid.U
 	if err != nil {
 		return cdm.Indice{}, errors.Envolver(err, "reclassificar bloco")
 	}
+	revisoes := indice.Revisoes[:0]
+	for _, revisao := range indice.Revisoes {
+		if revisao.RefXML != refXML {
+			revisoes = append(revisoes, revisao)
+		}
+	}
+	indice.Revisoes = revisoes
 	novo, err := indice.Serializar()
 	if err != nil {
 		return cdm.Indice{}, errors.Envolver(err, "serializar estrutura corrigida")

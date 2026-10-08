@@ -1,163 +1,231 @@
-# Retomada — onde paramos e o que vem agora
+# Retomada
 
-**Atualizado:** 2026-09-27 · Arquivo único, sobrescrito a cada sessão. Substitui
-a antiga cadeia de cinco arquivos de retomada.
+Atualizado em 08/10/2026. Recorte `f3-gate-ruleset-inativo` **concluído**:
+4 contratos, 15 critérios, V1/V2/V3 todos `passou`, integração EXECUTADA.
+A árvore contém alterações de várias sessões e arquivos não rastreados;
+preservar tudo. Nada commitado. A spec ativa também é não rastreada: não
+assumir que versões anteriores sejam recuperáveis pelo Git.
 
-## Em uma frase
+## O que ficou pronto
 
-F0, F1 e F2 funcionalmente fechadas. F3 tem unidades, schema, loader e seed;
-**não tem motor, endpoints nem perfil normativo publicado**.
+`TipoJob.ValidarRulesetParaNovoJob(ativo *bool)` em `entity/tipo.go` e o gate
+em `InserirOuObter` (`data/postgres/job.go`). Job NOVO que exige ruleset precisa
+de perfil existente e ativo; ausente e inativo devolvem erro IDÊNTICO em
+`ruleset_id`. Repetição de chave vence o gate. Ordem no código: `SET LOCAL
+lock_timeout` → `FOR SHARE` em `documentos` → gate → INSERT → releitura.
 
-## Estado do repositório
+A implementação ficou **mais barata que o contrato original**: o gate roda
+primeiro e só consulta a chave quando reprova, então o caminho feliz não paga
+query extra. Foi por isso que reescrever o contrato do adaptador como
+INVARIANTES em vez de ordem de queries valeu a pena.
 
-⚠️ **A árvore está suja e nada foi commitado desde `e373525`.** São duas semanas
-de trabalho F2/F3 fora do git, mais a refatoração de 27/09. Não resete, não
-restaure testes antigos e não reverta arquivos alheios.
+Ciclo: spec → pré-auditoria (2 rodadas, arquitetura e segurança) → RED
+executado → código → V1/V2/V3 → revisão do delta (segurança APROVA;
+arquitetura APROVA COM CORREÇÕES, 1 bloqueante) → correção → fechamento.
 
-## Medição de 27/09 — refatoração
+## Evidência de 08/10, reproduzida pelo principal
 
-Executada após auditoria de todo o backend. Resultado real:
+- build/vet/vet-integration/gofmt PASS; `golangci-lint run ./...` 0 issues;
+  `go test ./... -race -count=1` exit 0, 34 pacotes, nenhum FAIL/race.
+- Integração com Podman: `-race` exit 0 em 19.265s. O teste de modo de lock
+  (`TestInserirOuObterGateDePerfilUsaForShare`) levou 0,23s, coerente com o
+  deadline de 200 ms disparando — **a prova de lock executou**, não ficou só
+  escrita.
+- Shuffle: ok com a seed que ANTES falhava (1791499507274547732) e com seed
+  aleatória. Comando de integração desta máquina:
+  `env DOCKER_HOST=unix:///run/user/1000/podman/podman.sock MIGRACOES_REDE_CONTAINER=slirp4netns TESTCONTAINERS_RYUK_DISABLED=true go test ./internal/data/postgres -tags integration -race -count=1`
 
-```
-go build ./...                     PASS
-go vet ./...                       limpo
-go vet -tags=integration ./...     limpo
-gofmt -l .                         limpo
-go test ./... -race -count=1       PASS, 31 pacotes, 0 falhas
-```
+## Quatro erros deste recorte, para não repetir
 
-O que mudou, e por quê:
+1. **Justificativa factual errada aceita por leitura.** Escrevi que "inserir e
+   validar depois" exigiria `SAVEPOINT`; falso, ele só serve para CONTINUAR a
+   transação. Pior: exigi prova para a afirmação do `FOR SHARE` e aceitei essa
+   por leitura no mesmo parágrafo. O motivo real é de lock, e o RED o provou.
+2. **Duas afirmações INFALSIFICÁVEIS** na spec ("análise e preview não pagam
+   query alguma", "sem query ao catálogo"), repetindo um erro que a auditoria
+   já tinha me corrigido em outro critério na rodada anterior.
+3. **Terceiro comentário mentiroso, num comentário que eu dicteti.** Mandei
+   dizer que "o contexto vence antes do lock_timeout" — verdade só no teste, que
+   usa deadline de 200 ms de propósito; em produção não há prazo por requisição.
+   Este recorte tinha DOIS contratos (C3, C4) existindo só para consertar
+   comentários falsos, e produziu um terceiro.
+4. **Teste dependente de ordem.** A pré-condição global de catálogo vazio
+   passava por sorte alfabética. `-shuffle=on` derruba. Vale rodar shuffle ao
+   fechar recorte que toque integração.
 
-| Mudança | Motivo |
-|---|---|
-| `internal/rotas/sessao` passa a ser o único dono do cookie de sessão | havia **duas** implementações e duas constantes `"sessao_id"`; trocar uma e esquecer a outra derrubaria metade da API sem erro de compilação |
-| `TestDominioNaoImportaInfra` em `internal/arquitetura` | a regra nº 1 da arquitetura não tinha teste. Estava respeitada por disciplina, e basta um autoimport da IDE para quebrá-la |
-| `cdm.ErroIndiceCorrompido` e `cdm.ErroRefXMLDuplicado` | a reclassificação de CDM corrompido existia em três lugares, com duas variantes — uma descartando a causa |
-| `documentos` volta a ter **um** controlador e **um** roteador | havia dois de cada, registrados separadamente na raiz, para o mesmo recurso |
-| `telemetry.Encerrar` | o worker fechava o tracing fora de `defer` e **perdia os spans** quando o laço falhava. Bug real, não estilo |
-| `cfg.OrigensCORS` | `cmd/api` lia `os.Getenv` direto; `config` é o único lugar que lê o ambiente |
-| `montarDependencias` extraída de `executar` | `executar` tinha 114 linhas e o ciclo de vida do processo ficava ilegível no meio de oito construções de serviço |
-| godoc nos símbolos exportados | de ~80 sem documentação para 0. Os arquivos novos não tinham nenhuma, os antigos explicavam cada decisão |
+## Próximo recorte
 
-Nenhuma mudança de comportamento observável pela API.
+Branch `TipoFormatar` no executor. Precisa:
 
-## Medição de 27/09 — seed F3 (entrega anterior)
+1. Campo de resultado no `Documento` + migration (hoje só `ChaveStorage` e
+   `ChaveStoragePDF`).
+2. Branch em `fila/executor.go:93`, que hoje cai em "tipo de job não suportado",
+   usando `RulesetsConsulta().ObterPorID` + `Planejar` + `AplicarPlano`.
+3. **Takedown**, que este gate NÃO resolve: job pendente criado antes da
+   desativação segue executável, `Reenfileirar` o devolve para pendente e
+   `Reivindicar` não consulta `rulesets`. A porta já devolve o flag `ativo` e
+   nenhum Go o consome.
+4. **Aí sim** `context.Context` nos sete mutadores OOXML, com teste real de
+   cancelamento, e o single-parse do `document.xml`.
+5. Prazo por requisição no caminho HTTP — sem ele, `lock_timeout` de 3s é o teto
+   e dez requisições presas esgotam o pool de 10.
 
-`RulesetRepo.Semear`, facade de dados, adaptador Postgres e `rulesetctl semear`.
-Contrato: validar o lote inteiro antes de qualquer SQL; máximo 4096 definições;
-ordenar por slug/versão; transação **explicitamente READ COMMITTED**; INSERT ON
-CONFLICT DO NOTHING com SELECT separado, em novo snapshot. Divergência de nome
-ou de JSONB reverte o lote inteiro. **Nunca UPDATE**: repetir preserva ID,
-checksum e `ativo`, inclusive perfil desativado. Checksum é SHA256 do JSON
-tipado da primeira inserção, não dos bytes YAML.
+Débitos completos em `docs/estado-do-backend.md`, seções de 08/10. Os que mais
+importam: reprodutibilidade do ruleset SEM LASTRO até o checksum ser verificado;
+SSRF em `Fonte`; `RulesetsConsulta()` sem consumidor de produção (código morto se
+o dono não entregar o consumidor); e o buraco do gate de lint, que roda
+`golangci-lint` sem a tag `integration`.
 
-Evidências daquela rodada, **não reexecutadas** depois:
+F3 NÃO está concluída. `Planejar`, `AplicarPlano` e `ObterPorID` seguem sem
+chamador de produção, e nenhuma rota cria `TipoFormatar`.
 
-- Seed em Postgres real: PASS em 12,369s. Lock real com deadline de 100ms: PASS
-  em 8,183s, preservando `DeadlineExceeded`.
-- Revisão independente aprovou o delta.
-- **Não houve E2E do processo CLI contra banco**: a CLI foi verificada com fake e
-  o adaptador com banco real, separadamente. Nenhum banco de usuário foi alterado.
+Nenhum agente ou comando ativo.
 
-Contrato detalhado em `plano-backend.md`, seção F3, e em `mapa-modulos.md`,
-`MOD: rulesets-seed`.
+## Pausa posterior em 08/10 — investigação do gate de criação
 
-## Próxima tarefa
+Usuário autorizou prosseguir com o gate de rulesets inativos. Git e instruções
+reconciliados; nenhum delta prévio em domain/job nem data/postgres/job.go.
+Árvore suja preservada. Nenhum código ou teste alterado nesta rodada.
+A spec ativa permanece f3-leitura-ruleset-por-id, concluída; ainda NÃO foi
+substituída por spec do gate. Evidência focal histórica da leitura preservada
+também em docs/estado-do-backend.md antes da futura substituição.
 
-**Primeiro recorte do motor:** aplicar tamanho de página e margens a `w:sectPr`
-a partir de uma definição sintética validada, sem alterar texto nem partes
-não-alvo.
+Fatos conferidos: CriacaoJobRepo.InserirOuObter mantém assinatura; o adaptador
+devolve o job existente mesmo com payload divergente, e Servico.Criar decide
+o conflito. O teste TestInserirOuObterPayloadDivergenteDevolveJobExistente
+documenta essa divisão, embora o comentário da porta pareça prometer conflito
+no adaptador. Não mover a regra incidentalmente. Testes de integração estão
+em data/postgres/postgres_integration_test.go, não job_integration_test.go.
 
-Ele tem **duas partes**, e a primeira não é óbvia:
+Proposta em investigação, NÃO aprovada: serializar criação por documento,
+reautorizar dono com lock, consultar a chave existente antes de consultar
+ativo, e apenas para job novo ler ruleset sob FOR SHARE até o commit.
+Regra pura no domínio; adaptador coleta fatos e mantém a transação. Avaliar
+FOR UPDATE no documento e READ COMMITTED explícito, custo de serialização e
+testes determinísticos das duas ordens de desativação/criação. Preservar
+repetição terminal, conflito de payload e erros iguais para ausente/inativo.
+Sem novo framework de transação, executor, frontend ou alteração OOXML.
 
-**1. Dar a `ooxml.Documento` a capacidade de substituir os bytes de uma parte.**
-Hoje ela guarda só `[]*zip.File` e `Salvar` recopia entradas cruas com
-`zip.Writer.Copy` — **não existe nenhum caminho para gravar uma parte
-modificada**. Sem isso o mutador não tem onde escrever. Consequência: os testes
-de invariante comparam SHA-256 do ZIP **inteiro**, e isso deixa de poder valer;
-passam a comparar por parte.
+Referência consultada: documentação PostgreSQL 16, explicit-locking.html
+(FOR SHARE bloqueia UPDATE não-chave; FOR KEY SHARE não basta) e
+transaction-iso.html. Isso é fundamento de desenho, não teste executado.
 
-**2. O mutador de `w:sectPr`** — largura, altura e as quatro margens, com a
-regra no domínio e o detalhe XML na infra. O domínio não importa o adaptador
-OOXML (agora há teste para isso).
+Gate desta rodada, backend: go build ./... && go vet ./... && gofmt -l .
+exit 0, sem saída, em 08/10. Nenhuma suíte executada nesta rodada.
+Quota passou de 69% para 93% na janela de cinco horas (41% semanal);
+pausa exigida pelo AGENTS.md. Nenhum reset consumido.
 
-Recomendo recortes separados, com RED próprio. Juntos, o teste de invariante e o
-mutador mudam ao mesmo tempo e não se sabe qual quebrou o round-trip.
+Investigador concluiu a síntese parcial e foi encerrado. Propôs
+TipoJob.ValidarRulesetParaNovoJob(existe, ativo bool) error em entity/tipo.go:
+para tipo válido que exige ruleset, ausência/inatividade devolvem a mesma
+validação em ruleset_id; análise/preview passam. Ainda faltam fechar os
+testes determinísticos dos locks, erros SQL/contexto e destino do atual
+ON CONFLICT/releitura. Proposta não auditada; nenhuma nova spec gravada.
+Nenhum agente ou comando permanece ativo.
 
-### Cuidados que esse recorte exige
+Próximo passo: consultar quota, concluir os pontos pendentes da proposta,
+gravar nova spec apenas depois de preservar a anterior, pré-auditar com
+validador/segurança; então RED → codador → testes/revisões → fechamento.
+Próximo comando: git status --short; ler este checkpoint e a spec ativa.
+Não tratar esta investigação como implementação ou aprovação de contrato.
 
-- **`encoding/xml` reescreve declarações de namespace.** Não dá para
-  desserializar `word/document.xml` e reserializar: o Word abre com erro ou, pior,
-  ignora o nó calado. `ExtrairBlocos` só lê por causa disso. Leia
-  `.agents/skills/ooxml-referencia/SKILL.md` antes da primeira linha.
-- Ordem dos filhos em `w:sectPr` é *sequence* do ECMA-376. Confira contra o
-  schema, nunca contra memória. Nó ausente ≠ nó vazio.
-- Invariantes: sequência de runes de todo `w:t` idêntica; partes não-alvo com os
-  mesmos bytes descompactados; aplicar duas vezes não duplica propriedade.
-- Fixture **sintética identificada**. Nunca apresentada como ABNT ou Geousp.
-- Conversões devolvem `(int, error)`: o arredondamento precisa de caso próprio.
+Atualizado em 08/10/2026. Recorte f3-leitura-ruleset-por-id concluído:
+14 critérios, V1/V2 históricos aprovados e V3 executada neste fechamento.
+A árvore contém alterações de várias sessões e arquivos não rastreados;
+preservar tudo. Nada commitado ou enviado. A spec ativa também está não
+rastreada: não assumir que suas versões anteriores são recuperáveis pelo Git.
 
-### Ordem sugerida depois
+## Reconciliação e trabalho desta retomada
 
-1. Página e margens com invariantes.
-2. Tipografia de corpo com o schema atual. Regras por papel só após extensão
-   explícita do schema — **elas não existem hoje, não presuma que existem**.
-3. Consulta de rulesets, orquestração da formatação, persistência de artefatos e
-   os endpoints F3, preservando autorização e concorrência.
-4. DOCX final → PDF → download, com fluxo real e inspeção visual.
-5. Perfil normativo publicável, **depois** de fonte verificada.
+O Docker continua ausente, mas o Podman 5.7.0 está instalado e seu socket local
+está disponível. A alternativa já estava documentada em
+backend/migrations/README.md. Não foi preciso instalar software ou alterar
+produção/testes. O acesso ao socket e a execução foram autorizados pelo
+mecanismo de escalonamento do ambiente.
 
-## Bloqueio que não é código
+Corrigidas divergências documentais: C3 da spec ainda descrevia cinco colunas,
+embora a correção final use quatro; A11 agora descreve slug inválido, A12 os
+quatro casos de procedência e A14 distingue recusa observada de inferência
+sobre transporte. Estado/mapa atualizados para retirar o bloqueio antigo.
 
-`backend/rulesets/` tem o schema técnico e **nenhum perfil normativo**. Publicar
-um exige os valores da ABNT NBR 14724 de fonte oficial — margens, corpo,
-entrelinha, recuo, ordem das seções. A skill `normas-abnt` traz a tabela de
-conversão pronta e os valores normativos como **placeholder de propósito**.
+## Evidência real de 08/10/2026
 
-Não inventar valor de norma. Isso não bloqueia os recortes técnicos, que usam
-fixtures sintéticas.
+Responsável pela V3: principal. Diretório: backend.
 
-## Comandos de verificação
-
-A partir de `backend/`:
-
-```sh
-GOCACHE=/tmp/formatador-go-cache go build ./...
-GOCACHE=/tmp/formatador-go-cache go vet ./...
-gofmt -l .
-GOCACHE=/tmp/formatador-go-cache go test ./... -race -count=1
-```
-
-Integração com Podman, em banco efêmero — **nunca com DSN de produção**:
-
-```sh
+~~~sh
 DOCKER_HOST=unix:///run/user/1000/podman/podman.sock \
-MIGRACOES_REDE_CONTAINER=slirp4netns \
-TESTCONTAINERS_RYUK_DISABLED=true \
-GOCACHE=/tmp/formatador-go-cache \
-go test -tags=integration ./internal/data/postgres -race -count=1
-```
+MIGRACOES_REDE_CONTAINER=slirp4netns TESTCONTAINERS_RYUK_DISABLED=true \
+go test ./internal/data/postgres -tags integration -run 'TestObterRulesetPorID' -race -count=1 -v
+~~~
 
-Com Ryuk desativado, confira a limpeza dos containers de teste. Na raiz, depois
-de mexer em instruções:
+Exit 0; pacote postgres 11.226s. Sete testes principais PASS: perfil semeado,
+ID ausente/zero, flag inativo, definição inválida, quatro divergências de
+slug/versão, contexto cancelado e tamanho exatamente 65536/65537 bytes.
+Testcontainers usou a imagem PostgreSQL fixada por digest no teste. Container
+0dd2892f8b7e criado, parado e removido pelo TestMain. Ryuk desativado apenas
+nesta execução local, com cleanup explícito; não usar prune global.
 
-```sh
-git diff --check
-python3 scripts/sincronizar_instrucoes.py --check
-```
+go build ./... && go vet ./... && gofmt -l .: exit 0, sem saída.
+Nenhuma alteração de produção nesta retomada. V1 e V2 continuam com as
+medições anteriores da spec (V2 de 08/10 às 08:30, 34 pacotes com -race);
+a suíte global não foi repetida. A14 não mede alocação nem tráfego do driver.
 
-⚠️ **`podman-compose up -d <serviço>` reaproveita o container existente e não
-troca a imagem.** Sem `podman rm -f` antes, você depura código que não está
-rodando. Custou duas rodadas para descobrir.
+Validador e segurança reauditaram independentemente o delta corretivo final,
+somente leitura, e ambos APROVARAM sem bloqueios: SELECT/Scan com quatro
+colunas, NULL acima do teto, teste ligado ao limite do carregador e mensagens.
+Revisão estática não substituiu a execução de V3 acima.
 
-## Decisões que não devem ser desfeitas
+## Contratos entregues
 
-- Backend Go contém as regras; o frontend React só consome a API. Hexagonal, com
-  a dependência apontando sempre para dentro.
-- DOCX é mutado **in-place**. O PDF vem do DOCX final. O CDM é índice semântico,
-  não cópia estilizada.
-- Autorização por `vo.Dono`. Não reintroduzir dono universal nem nil
-  compartilhado. O worker tem fronteira própria. Preservar CAS e isolamento.
-- Perfil semeado é imutável por versão. Fixture sintética não é ABNT nem Geousp.
-- Entrelinha publicada em cm pela Geousp é ambígua: não converter silenciosamente
-  para multiplicador.
+- ConsultaRulesetRepo.ObterPorID(ctx, UUID) devolve Definicao, ativo e erro;
+  porta segregada, exposta por data/contracts e Gerenciador.RulesetsConsulta.
+- decodificarRuleset aplica teto, unmarshal e Validar; corrupção vira
+  ErroAplicacao sem encadear JSON/ErroValidacao ou valores armazenados.
+- SELECT usa CASE/octet_length para devolver NULL acima de 65536 bytes;
+  quatro colunas: payload, slug, versao e ativo. Scan em json.RawMessage;
+  len(dados)==0 recusa o NULL. Confere slug/versao das colunas com o JSON;
+  devolve o flag ativo sem filtrá-lo. Driver sanitizado e contexto propagado.
+
+## Próximo recorte
+
+Preparar spec do gate de ruleset na CRIAÇÃO de job formatar, antes de ligar o
+executor. Conferido nesta retomada:
+
+- domain/job/criacao/servico.go: Criar autoriza o documento e chama
+  InserirOuObter; não consulta ativo.
+- data/postgres/job.go: InserirOuObter reautoriza o dono em transação com
+  FOR SHARE no documento; INSERT ON CONFLICT e releitura asseguram idempotência.
+
+O novo contrato deve decidir a validação de ativo para job NOVO preservando
+repetição idempotente de job existente, conflito de payload e autorização.
+Uma consulta simples antes de InserirOuObter pode recusar uma repetição após
+inativação; consulta e INSERT separados também permitem desativação concorrente.
+São riscos de desenho a resolver na spec e nos critérios de integração,
+sem implantar regras de negócio na camada de dados por conveniência.
+
+Próxima leitura: rg -n 'job-dominio|job.go|ruleset' docs/mapa-modulos.md,
+serviço de criação, porta CriacaoJobRepo e testes de idempotência. Investigador
+usa spec-verificavel; validador/segurança auditam a nova spec antes do RED.
+Não substituir a spec concluída sem preservar suas evidências/pendências.
+
+Depois do gate: fluxo de resultado, armazenamento e branch TipoFormatar;
+propagação de context nos mutadores ao integrá-los. F3 segue sem fluxo completo.
+Não presumir necessidade de migration antes de definir se o resultado pertence
+ao documento ou ao job; a decisão anterior ainda não foi contratada.
+
+## Débitos preservados
+
+Constam em docs/estado-do-backend.md: checksum não conferido, sanitização dos
+demais erros Postgres, deadlines/cancelamento do executor, lint com tag
+integration e validação de Fonte caso venha a ser buscada pelo servidor.
+Trocar o teto concatenado por placeholder é sugestão de estilo, sem bloqueio.
+A mensagem da função pura agrupa vazio/excesso; revisar se ganhar outro uso.
+Não afirmar conformidade normativa nem reprodutibilidade contra alterações
+arbitrárias no banco. Nenhum LLM/Jev foi chamado.
+
+## Agentes, comandos e quota
+
+Dois revisores desta retomada concluídos e encerrados. Nenhum escritor de
+produção delegado; nenhum comando de teste permanece ativo.
+Última quota consultada: 42% da janela de cinco horas e 33% semanal; nenhum
+reset consumido. Consultar novamente antes da próxima delegação.

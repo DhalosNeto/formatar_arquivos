@@ -57,6 +57,14 @@ Medições históricas e limites da evidência: `docs/estado-do-backend.md`.
 - `repository/documento.go` — `DocumentoRepo` (público, com dono) e `DocumentoInternoRepo` (worker, CAS)
 
 ## MOD: job-dominio ✅
+
+**Gate de ruleset inativo (08/10):** `entity/tipo.go` tem
+`ValidarRulesetParaNovoJob(ativo *bool) error` — regra pura, `nil` = perfil
+ausente CONFIRMADO, e ausente/inativo devolvem erro IDÊNTICO em `ruleset_id`
+para o gate não virar oráculo de enumeração do catálogo. Aplicado dentro de
+`data/postgres/job.go` `InserirOuObter`, na mesma transação, com `FOR SHARE` na
+linha de `rulesets`. Repetição de chave VENCE o gate. É gate de CRIAÇÃO e **não
+retira perfil de circulação** — takedown é débito do executor.
 **keywords:** Job, fila, idempotencia, chave, retry, progresso, cancelar, CAS
 
 - `entity/job.go` — `Job`, `NovoJob`, `Iniciar`, `DefinirProgresso`, `Concluir`, `Falhar`, `Cancelar`, `Reenfileirar`, `Terminal`, `Duracao`
@@ -216,14 +224,16 @@ Medições históricas e limites da evidência: `docs/estado-do-backend.md`.
 - Fronteira pgx: examina `.Imports` **diretos**. API → data/postgres → pgx é uma dependência transitiva legítima.
 - Cada teste de fronteira tem um teste do PRÓPRIO DETECTOR antes dele: detector quebrado faz a fronteira passar sempre, que é a falha mais silenciosa possível.
 
-## MOD: ooxml ✅ (round-trip + extração de blocos)
+## MOD: ooxml ✅ (round-trip + extração de blocos + substituição de partes)
 **keywords:** ooxml, docx, XML, w:pPr, w:rPr, w:sectPr, w:body, w:tbl, w:pStyle, styles.xml, golden, extrair blocos, namespace
 
 - `backend/internal/infra/ooxml/pacote.go` — `Documento`, `Abrir(io.ReaderAt, int64)`, `Salvar(io.Writer)`
+- `backend/internal/infra/ooxml/partes.go` — `SubstituirParte`: alvo existente/único/seguro, bytes defensivos e teto agregado de deltas de 250 MiB. Nil/vazio substituem por zero bytes, sem excluir parte. Contrato na seção F3 do plano.
 - `backend/internal/infra/ooxml/blocos.go` — `BlocoBruto`, `TipoBlocoBruto{Paragrafo,Tabela}`, `(*Documento).ExtrairBlocos()`, `ClassificarPorEstiloDocx`, `TamanhoMaximoTextoResumo`
 - Pacote medido em 20/09 (pós-CDM): **PASS, 92,3%**, `-race`
 - **Round-trip é byte a byte**: SHA256 do ZIP de saída idêntico ao de entrada nos dois fixtures. É o teste que sustenta o ADR 0001
-- ⚠️ **Salvar continua sem desserializar.** `zip.Writer.Copy` recopia cada entrada sem descomprimir. `ExtrairBlocos` parseia num caminho **paralelo e somente leitura**, reabrindo a entrada do ZIP; não toca `d.arquivos`. `TestExtrairBlocosNaoAlteraOPacote` é a rede que impede essa separação de regredir
+- **Salvar não reserializa XML.** Partes intactas usam `Copy`; alteradas usam `CreateHeader` preservando método e timestamps, com CRC/tamanhos recalculados e ZIP64 antigo removido. `ExtrairBlocos` lê o delta aceito ou a origem. No-op integral continua testado; casos com delta conferem partes não-alvo.
+- Medição 29/09: suíte global com race PASS, OOXML 19,067s; testes focais novos com race PASS na rodada anterior. Mutador de página ainda não implementado.
 - **Bloco = filho direto de `w:body`** (`w:p` ou `w:tbl`). Parágrafo dentro de célula **não** é bloco próprio; a tabela é um bloco só. `Indice` é a posição ordinal e vira `RefXML` no CDM — nunca um id injetado no XML (injetar mutaria o documento do usuário)
 - Elementos são reconhecidos pelo **namespace** (`espacoNomesW`), não pelo prefixo literal `w:`: o prefixo é escolha de quem gerou o arquivo
 - Texto concatena todos os `w:t` do bloco **sem separador**, respeitando `xml:space="preserve"`; parágrafo vazio vira bloco de texto vazio para não desalinhar os índices
@@ -232,11 +242,39 @@ Medições históricas e limites da evidência: `docs/estado-do-backend.md`.
 - Fixtures: `testdata/artigo-real-libreoffice.docx` (10 partes, LibreOffice, 40 blocos) e `artigo-desformatado.docx` (4 partes, sintético)
 - `backend/internal/infra/ooxml/analisar_estrutura.go` — `AnalisarEstrutura`: abre DOCX, extrai blocos e aplica camadas 1 e 2. O worker serializa e persiste o CDM; POST análise, GET/PATCH estrutura e GET jobs implementados; ver `docs/plano-backend.md`, F2.
 
+## MOD: ruleset-leitura ✅ (leitura por ID; integração executada)
+
+**keywords:** ruleset, perfil, revista, ObterPorID, ConsultaRulesetRepo, decodificarRuleset, ativo, procedencia, teto de tamanho, jsonb
+
+- `backend/internal/domain/ruleset/repository/ruleset.go` — `RulesetRepo` (só `Semear`) e `ConsultaRulesetRepo` (`ObterPorID(ctx, uuid) (Definicao, bool, error)`; o `bool` é o flag `ativo`). Portas segregadas por caso de uso.
+- `backend/internal/data/postgres/ruleset.go` — `decodificarRuleset` (pura: teto → unmarshal → `Validar`, tudo `*ErroAplicacao`), `ObterPorID` (sem filtro de `ativo`, confere procedência coluna vs JSON, teto no SQL), `erroConsultaRuleset` (idioma de `erroSeed`, não encadeia driver).
+- A8–A14 executados em 08/10/2026 via Testcontainers/Podman contra PostgreSQL descartável: PASS com `-race`, 11.226s. Sem chamador de produção; o gate de `ativo` na criação de job segue pendente.
+
+## MOD: formatador ✅ (plano de formatação, domínio puro)
+
+**keywords:** plano, planejar, formatacao, selecao de blocos, referencias de corpo, ordinal, RefXML, paragrafo generico, porta de validacao
+
+- `backend/internal/domain/formatador/plano.go` — `Plano{Pagina, Corpo, ReferenciasCorpo}`, `Planejar(cdm.Indice, ruleset.Definicao) (Plano, error)`. Puro: sem ctx, sem I/O, sem log. Importa só `domain/cdm`, `domain/ruleset`. É a porta de validação: o adaptador não revalida.
+- Executor do plano: `backend/internal/infra/ooxml/formatar.go` — `(*Documento).AplicarPlano(formatador.Plano, MargensComplementares) error`, atômico sobre cópia com `partesSubstituidas` clonado; reusa `AplicarPagina`, `AplicarAlinhamento`, `AplicarEntrelinha`, `AplicarRecuoPrimeiraLinha`, `AplicarEspacamentoAntes/Depois`, `AplicarTipografia`. **Sem caller em produção.**
+
 ## MOD: cdm ✅ (entidade, heurística e serialização)
+
+### Fallback Jev experimental (29/09/2026)
+
+- `backend/internal/domain/cdm/fallback.go` — `ClassificadorEstrutura`,
+  `NovoFallback`, `PoliticaConfianca`, `RevisaoEstrutura`: consulta limitada,
+  aplicar/confirmar/revisar, preservação da origem usuário.
+- `backend/internal/infra/llm/jev.go` — `NovoClienteJev`: API Choice TypeSafe,
+  trechos limitados, validação HTTP e probabilidades, mensagens fixas.
+- `backend/internal/infra/config/jev.go` — flag `JEV_HABILITADO`, chave
+  `TYPESAFE_API_KEY`, modelo e limites. Worker conecta; off por padrão.
+- `Indice.Revisoes` persiste no CDM v1 e aparece no GET/PATCH estrutura.
+  Correção manual remove revisão do alvo. Calibração e teto monetário pendentes.
 **keywords:** cdm, bloco, papel, secao, origem, confianca, reclassificar, RefXML, TextoResumo, heuristica, llm, correção do usuário
 
 - `backend/internal/domain/cdm/bloco.go` — `Papel` (VO comparável, campos privados), `Secao(nivel)`, `Origem`, `Bloco`, `NovoBloco`, `(Bloco).Reclassificar`
 - `backend/internal/domain/cdm/heuristica.go` — `AplicarHeuristica([]Bloco) ([]Bloco, error)`, a **camada 2**
+- `backend/internal/domain/cdm/serializacao.go` — `(Indice).Validar() error`: versão → RefXML duplicado (vence, devolve `ErroRefXMLDuplicado` cru) → blocos inválidos (máximo um `CampoInvalido` por termo). NÃO confere `Confianca` nem `Revisoes`
 - Coberturas históricas de 20/09/2026: camada 2 **PASS, 95,5%**; após serialização **PASS, 96,7%**, ambas com `-race`. Não são medição global atual.
 - `Papel` sem nível: Titulo, ListaAutores, Resumo, PalavrasChave, Paragrafo, Citacao, ItemLista, Tabela, Figura, Legenda, Equacao, Referencia, NotaRodape. `Secao(n)` é o único com hierarquia, válido em **1..6**
 - `Origem` ∈ `estilo-docx` | `heuristica` | `llm` | `usuario`, case sensitive
@@ -285,6 +323,58 @@ Passada única na ordem do documento; fatia nova, entrada nunca mutada. Cinco re
 - `docs/adr/0001-docx-in-place.md` · `docs/adr/0002-fila-sem-river.md`
 - Contratos fechados: `docs/{ciclo-b,job-entity,job-criacao,job-consulta,migration-dono,migration-job-idempotencia}-contrato.md`
 
+## MOD: pagina-margens-ooxml
+
+**keywords:** pagina, margens, sectPr, pgSz, pgMar, namespaces, atomicidade
+
+- `backend/internal/infra/ooxml/pagina.go` — `Documento.AplicarPagina`, `MargensComplementares`: dimensões/margens cm, auxiliares explícitos em twips; preserva existentes.
+- `backend/internal/infra/ooxml/pagina_xml.go` — edição lexical, escopos de namespace, seções correntes, ordem pgSz/pgMar, limites de recursos e gravação atômica.
+- `backend/internal/infra/ooxml/pagina_test.go`, `pagina_bordas_test.go`, `pagina_auditoria_test.go` — preservação, Unicode, histórico, idempotência, atomicidade e entradas adversariais.
+- `backend/internal/domain/ruleset/definicao.go` — `Pagina.Validar`: valida apenas página, sem exigir o ruleset completo.
+
+## MOD: alinhamento-paragrafos-ooxml
+
+**keywords:** alinhamento, paragrafo, jc, pPr, RefXML, ordinal, esquerda, direita, centralizado, justificado
+
+- `backend/internal/infra/ooxml/alinhamento.go` — `Documento.AplicarAlinhamento`: referências de parágrafos diretos, edição lexical de jc, validação de ordem CT_PPr e substituição atômica. Reutiliza `pagina_xml.go`.
+- `backend/internal/domain/ruleset/definicao.go` — `ValidarAlinhamento`: whitelist compartilhada com a validação de Corpo.
+- `backend/internal/infra/ooxml/alinhamento_test.go` — ordinais, preservação, namespaces entre irmãos, idempotência, rejeições e expansão acima do limite.
+- `backend/internal/domain/ruleset/alinhamento_test.go` — valores exatos e erros tipados.
+
+## MOD: entrelinha-ooxml
+
+**keywords:** entrelinha, spacing, lineRule, auto, multiplo, 240, preservacao
+
+- `backend/internal/infra/ooxml/entrelinha.go` — `Documento.AplicarEntrelinha`: grava line/lineRule auto, sem alterar before/after ou estilos.
+- `backend/internal/infra/ooxml/alinhamento.go` — caminho compartilhado `aplicarPropriedadeParagrafos` / `prepararPropriedadeParagrafo`: seleção, ordem CT_PPr, limites de buffers e substituição atômica para alinhamento e entrelinha.
+- `backend/internal/domain/ruleset/definicao.go` — `ValidarEntrelinha`, compartilhada com Corpo.validar; conversor em `domain/vo/unidades.go`.
+- `backend/internal/infra/ooxml/entrelinha_test.go`, `backend/internal/domain/ruleset/entrelinha_test.go` — critérios da spec f3-entrelinha-direta.
+
+## MOD: recuo-primeira-linha-ooxml
+
+**keywords:** recuo, primeira linha, firstLine, hanging, estilos, docDefaults, preflight
+
+- `backend/internal/infra/ooxml/recuo.go` — `Documento.AplicarRecuoPrimeiraLinha`, preflight de conflitos diretos e herdados, resolução da relação canônica de estilos.
+- `backend/internal/domain/ruleset/definicao.go` — `ValidarRecuoCM`; conversão em `domain/vo/unidades.go`.
+- `backend/internal/infra/ooxml/recuo_test.go`, `backend/internal/domain/ruleset/recuo_test.go` — cobertura focal e rejeições atômicas.
+
+## MOD: espacamento-direto-paragrafos-ooxml
+
+**keywords:** espacamento, antes, depois, before, after, spacing, twips, paragrafo
+
+- `backend/internal/infra/ooxml/espacamento.go` — `Documento.AplicarEspacamentoAntes/Depois`: grava atributos diretos `w:before` ou `w:after`, sem garantir distância visual efetiva.
+- `backend/internal/infra/ooxml/alinhamento.go` — seleção, edição lexical e substituição atômica compartilhadas.
+- `backend/internal/domain/vo/unidades.go` — `PontosParaTwips`; medidas do ruleset em `domain/ruleset/definicao.go`.
+- `backend/internal/infra/ooxml/espacamento_test.go` — conversão, preservação, atomicidade e idempotência.
+
+## MOD: tipografia-direta-runs-ooxml
+
+**keywords:** fonte, tamanho, tipografia, rPr, rFonts, sz, szCs, meio-ponto, run, XML
+
+- `backend/internal/infra/ooxml/tipografia.go` — `Documento.AplicarTipografia`: fonte e tamanho diretos em runs de texto, seleção ordinal, CT_RPr, rejeição de wrappers/temas/estrutura ambígua, edição lexical atômica.
+- `backend/internal/domain/ruleset/definicao.go` — `ValidarFonteCorpo` e `ValidarTamanhoCorpoPT`, usados por `Corpo.validar`; `domain/vo/unidades.go` converte pontos para meios-pontos.
+- `backend/internal/infra/ooxml/tipografia_test.go`, `backend/internal/domain/ruleset/tipografia_test.go` — validação, XML adversarial, preservação, atomicidade e idempotência.
+
 ## MOD: instrucoes-agentes
 **keywords:** agentes, instrucoes, sincronizar, Claude, Codex, AGENTS, fonte, geracao
 
@@ -292,3 +382,6 @@ Passada única na ordem do documento; fatia nova, entrada nunca mutada. Cinco re
 - `scripts/sincronizar_instrucoes.py` — `sincronizar`, `gerar_agente`; `--write` regenera, `--check` detecta divergência sem escrever.
 - `scripts/test_sincronizar_instrucoes.py` — testes de geração, TOML e detecção de drift.
 - Não editar cópias nem copiar modelos/ferramentas de outra IDE; comandos da aplicação permanecem os do código.
+- `CLAUDE.md` — contexto e compactação: leitura por recorte, quota, limite de paralelismo, ownership e evidências. Checkpoint único em `docs/retomada.md`.
+- `.agents/skills/spec-verificavel/SKILL.md` — gerar/autoverificar a única `docs/spec-ativa.json`; independente das revisões de código.
+- `.agents/skills/spec-verificavel/scripts/verificar_spec.py` — `verificar_spec`: estrutura, caminhos, contratos/critérios e evidências; nunca executa comandos. Testes: `scripts/test_verificar_spec.py`.

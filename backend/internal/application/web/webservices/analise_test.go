@@ -223,6 +223,25 @@ func TestObterEstruturaFeliz(t *testing.T) {
 	assert.Equal(t, 1, resposta.Blocos[1].Nivel)
 }
 
+func TestObterEstruturaMapeiaRevisoes(t *testing.T) {
+	t.Parallel()
+	servico, repo, _ := novoServicoAnaliseDeTeste(t)
+	dono := donoDeTeste(t)
+	doc := documentoComCDMDeTeste(t, dono)
+	indice, err := cdm.Desserializar(doc.CDM)
+	require.NoError(t, err)
+	papel := cdm.Secao(2)
+	indice.Revisoes = []cdm.RevisaoEstrutura{{RefXML: indice.Blocos[0].RefXML, PapelSugerido: &papel, Confianca: .7, Acao: "confirmar"}}
+	doc.CDM, err = indice.Serializar()
+	require.NoError(t, err)
+	repo.documentos = map[uuid.UUID]entity.Documento{doc.ID: doc}
+	resposta, err := servico.ObterEstrutura(context.Background(), dono, doc.ID)
+	require.NoError(t, err)
+	require.Len(t, resposta.Revisoes, 1)
+	require.Equal(t, "secao", resposta.Revisoes[0].PapelSugerido.Nome)
+	require.Equal(t, 2, resposta.Revisoes[0].PapelSugerido.Nivel)
+}
+
 // TestObterEstruturaCDMCorrompidoDevolveErroAplicacaoNuncaErroValidacao é o
 // teste que trava o bug já ocorrido neste projeto (ver erroLinhaCorrompida em
 // internal/data/postgres/documento.go): cdm.Desserializar devolve

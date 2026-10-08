@@ -55,6 +55,7 @@ type ExecutorDocumento struct {
 	armazenador ArmazenadorObjetos
 	conversor   ConversorPDF
 	registrador *slog.Logger
+	fallback    *cdm.Fallback
 }
 
 // NovoExecutorDocumento monta o executor de jobs de documento.
@@ -63,7 +64,11 @@ func NovoExecutorDocumento(
 	armazenador ArmazenadorObjetos,
 	conversor ConversorPDF,
 	registrador *slog.Logger,
+	fallbacks ...*cdm.Fallback,
 ) (*ExecutorDocumento, error) {
+	if len(fallbacks) > 1 {
+		return nil, errors.NovoErroValidacao("fallback", "no máximo um fallback pode ser configurado")
+	}
 	if documentos == nil {
 		return nil, errors.NovoErroArgumentoNulo("documentos")
 	}
@@ -76,7 +81,11 @@ func NovoExecutorDocumento(
 	if registrador == nil {
 		return nil, errors.NovoErroArgumentoNulo("registrador")
 	}
-	return &ExecutorDocumento{documentos: documentos, armazenador: armazenador, conversor: conversor, registrador: registrador}, nil
+	var fallback *cdm.Fallback
+	if len(fallbacks) == 1 {
+		fallback = fallbacks[0]
+	}
+	return &ExecutorDocumento{documentos: documentos, armazenador: armazenador, conversor: conversor, registrador: registrador, fallback: fallback}, nil
 }
 
 // Executar despacha o job pelo tipo. Tipo desconhecido ou ainda não
@@ -129,17 +138,31 @@ func (e *ExecutorDocumento) extrairCDM(ctx context.Context, job entity.Job) (jso
 		// encadear contexto aqui também não acrescentaria nada útil ao log.
 		return nil, errors.Envolver(err, "analisar estrutura do documento")
 	}
+	if e.fallback != nil {
+		indice, err := e.fallback.Aplicar(ctx, blocos)
+		if err != nil {
+			return nil, errors.Envolver(err, "aplicar fallback de estrutura")
+		}
+		indiceJSON, err := indice.Serializar()
+		if err != nil {
+			return nil, errors.Envolver(err, "serializar cdm com fallback")
+		}
+		return e.persistirIndiceAnalisado(ctx, job, indice, indiceJSON)
+	}
 
 	indice, err := cdm.NovoIndice(blocos).Serializar()
 	if err != nil {
 		return nil, errors.Envolver(err, "serializar cdm do documento")
 	}
 
-	if _, err := e.documentos.ConcluirAnalise(ctx, job.DocumentoID, indice); err != nil {
+	return e.persistirIndiceAnalisado(ctx, job, cdm.NovoIndice(blocos), indice)
+}
+
+func (e *ExecutorDocumento) persistirIndiceAnalisado(ctx context.Context, job entity.Job, indice cdm.Indice, dados []byte) (json.RawMessage, error) {
+	if _, err := e.documentos.ConcluirAnalise(ctx, job.DocumentoID, dados); err != nil {
 		return nil, errors.Envolver(err, "gravar cdm do documento")
 	}
-
-	resultado, err := json.Marshal(resultadoAnalisar{Blocos: len(blocos)})
+	resultado, err := json.Marshal(resultadoAnalisar{Blocos: len(indice.Blocos)})
 	if err != nil {
 		return nil, errors.Envolver(err, "montar resultado do job de análise")
 	}
