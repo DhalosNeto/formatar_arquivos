@@ -1,6 +1,7 @@
 package arquitetura_test
 
 import (
+	"bytes"
 	"os/exec"
 	"strings"
 	"testing"
@@ -38,9 +39,11 @@ func TestHTTPNaoDependeDoProcessamentoInterno(t *testing.T) {
 	// -deps inclui caminhos indiretos por application, servidor e adaptadores.
 	comando := exec.CommandContext(t.Context(), "go", "list", "-deps", "./cmd/api", "./internal/rotas/...")
 	comando.Dir = "../.."
-	saida, err := comando.CombinedOutput()
+	var saidaErro bytes.Buffer
+	comando.Stderr = &saidaErro
+	saida, err := comando.Output()
 	if err != nil {
-		t.Fatalf("listar dependências HTTP: %v\n%s", err, saida)
+		t.Fatalf("listar dependências HTTP: %v\nstderr:\n%s\nstdout:\n%s", err, saidaErro.String(), saida)
 	}
 	if contemProcessamento(string(saida)) {
 		t.Fatal("HTTP alcança o serviço interno de processamento; use apenas o serviço com dono")
@@ -89,9 +92,11 @@ func TestDetectorDePgx(t *testing.T) {
 func TestPgxSoVazDentroDeInternalData(t *testing.T) {
 	comando := exec.CommandContext(t.Context(), "go", "list", "-f", `{{.ImportPath}}|{{join .Imports " "}}`, "./...")
 	comando.Dir = "../.."
-	saida, err := comando.CombinedOutput()
+	var saidaErro bytes.Buffer
+	comando.Stderr = &saidaErro
+	saida, err := comando.Output()
 	if err != nil {
-		t.Fatalf("listar importações diretas: %v\n%s", err, saida)
+		t.Fatalf("listar importações diretas: %v\nstderr:\n%s\nstdout:\n%s", err, saidaErro.String(), saida)
 	}
 
 	for _, linha := range strings.Split(strings.TrimRight(string(saida), "\n"), "\n") {

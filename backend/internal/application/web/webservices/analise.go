@@ -116,5 +116,13 @@ func paraEstruturaResposta(indice cdm.Indice) webmodel.EstruturaResposta {
 			RefXML:      bloco.RefXML,
 		})
 	}
-	return webmodel.EstruturaResposta{Versao: indice.Versao, Blocos: blocos}
+	revisoes := make([]webmodel.RevisaoEstruturaResposta, 0, len(indice.Revisoes))
+	for _, revisao := range indice.Revisoes {
+		var papel *webmodel.PapelSugeridoResposta
+		if revisao.PapelSugerido != nil {
+			papel = &webmodel.PapelSugeridoResposta{Nome: revisao.PapelSugerido.String(), Nivel: revisao.PapelSugerido.Nivel()}
+		}
+		revisoes = append(revisoes, webmodel.RevisaoEstruturaResposta{RefXML: revisao.RefXML, PapelSugerido: papel, Confianca: revisao.Confianca, Acao: revisao.Acao, Motivo: revisao.Motivo})
+	}
+	return webmodel.EstruturaResposta{Versao: indice.Versao, Blocos: blocos, Revisoes: revisoes}
 }

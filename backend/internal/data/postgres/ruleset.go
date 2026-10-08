@@ -12,9 +12,18 @@ import (
 	"github.com/daniel-halos/formatador/internal/data/contracts"
 	"github.com/daniel-halos/formatador/internal/domain/ruleset"
 	"github.com/daniel-halos/formatador/internal/infra/errors"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+// limiteDefinicaoBytes é o mesmo teto que infra/ruleset/carregar.go aplica na
+// ENTRADA (TamanhoMaximoBytes). Duplicado como const local, e não importado de
+// infra/ruleset, porque esse pacote arrasta jsonschema e o embed do diretório
+// rulesets para a camada de dados; data já importa infra/config e infra/errors,
+// então a duplicação não é por regra de camada. A igualdade entre os dois tetos
+// é amarrada em teste (ruleset_test.go, TestDecodificarRulesetTetoDeTamanho).
+const limiteDefinicaoBytes = 65536
 
 // RepositorioRuleset é o adaptador Postgres da porta de rulesets.
 type RepositorioRuleset struct{ pool *pgxpool.Pool }
@@ -129,3 +138,115 @@ func erroSeed(ctx context.Context) error {
 }
 
 var _ contracts.RulesetRepo = (*RepositorioRuleset)(nil)
+
+// ObterPorID lê um perfil já semeado e devolve, junto, o flag ativo da linha.
+//
+// O teto de tamanho vai NO SQL porque é ele que protege a memória do worker:
+// Scan materializa o jsonb inteiro antes de qualquer verificação em Go. Acima
+// do teto o CASE devolve NULL, então a recusa acontece sem transportar o
+// payload. `definicao::text` aparece UMA vez de propósito: o Postgres não
+// elimina subexpressão comum, e uma segunda ocorrência destoastaria e
+// serializaria a linha outra vez por leitura.
+//
+// A guarda em Go é só `len(dados) == 0`, e isso equivale a "o CASE devolveu
+// NULL", isto é, "acima do teto":
+//   - destino *json.RawMessage cai em scanPlanJSONToJSONUnmarshal
+//     (pgx v5.11.0, pgtype/json.go:169), que para src == nil zera a slice
+//     (json.go:198-205) — NULL chega como len 0;
+//   - nenhum valor jsonb produz texto de 0 byte (o mínimo é 2) e a coluna é
+//     NOT NULL, então len 0 não tem outra origem;
+//   - 'null'::jsonb chega com 4 bytes e é recusado depois, por Validar.
+//
+// Quem remover o CASE muda essa semântica em silêncio: sem ele, len 0 deixa de
+// ser alcançável e nenhum payload grande é recusado.
+//
+// NÃO filtra por ativo: o flag é devolvido, não aplicado (ver ConsultaRulesetRepo).
+//
+// Confere PROCEDÊNCIA: slug e versão das colunas, que carregam a UNIQUE
+// (slug,versao), têm de bater com os do JSON. A coerência entre os dois é
+// garantida só pela porta de seed, e SQL direto não passa por ela; divergir
+// faria o documento registrar procedência que não corresponde à linha lida.
+func (repositorio *RepositorioRuleset) ObterPorID(ctx context.Context, id uuid.UUID) (ruleset.Definicao, bool, error) {
+	const consulta = `SELECT CASE WHEN octet_length(definicao::text) <= $2 THEN definicao END,
+ slug, versao, ativo FROM rulesets WHERE id=$1`
+	var (
+		dados  json.RawMessage
+		slug   string
+		versao int
+		ativo  bool
+	)
+	if err := repositorio.pool.QueryRow(ctx, consulta, id, limiteDefinicaoBytes).Scan(&dados, &slug, &versao, &ativo); err != nil {
+		return ruleset.Definicao{}, false, erroConsultaRuleset(ctx, err)
+	}
+	if len(dados) == 0 {
+		return ruleset.Definicao{}, false, errors.NovoErroAplicacao(msgRulesetAcimaDoTeto)
+	}
+	definicao, err := decodificarRuleset(dados)
+	if err != nil {
+		return ruleset.Definicao{}, false, err
+	}
+	if definicao.Slug != slug || definicao.Versao != versao {
+		return ruleset.Definicao{}, false, errors.NovoErroAplicacao(msgRulesetProcedencia)
+	}
+	return definicao, ativo, nil
+}
+
+func erroConsultaRuleset(ctx context.Context, err error) error {
+	// Contexto tem precedência: cancelamento não é ausência de linha (regra 3).
+	if erroCtx := ctx.Err(); erroCtx != nil {
+		return errors.Envolver(erroCtx, "leitura de ruleset interrompida")
+	}
+	if errors.E(err, pgx.ErrNoRows) {
+		return errors.NovoErroNaoEncontrado("ruleset")
+	}
+	// Idioma de erroSeed: não encadear causas do driver, que podem conter DSN,
+	// usuário, banco ou SQL. envolverPostgres encadearia.
+	return errors.NovoErroAplicacao("não foi possível ler o ruleset")
+}
+
+// Mensagens fixas. Nenhuma deriva do dado lido: json.SyntaxError cita um
+// caractere do payload e json.UnmarshalTypeError cita `Definicao.<campo>`.
+const (
+	msgRulesetAcimaDoTeto = "ruleset armazenado fora do limite de tamanho"
+	msgRulesetIlegivel    = "ruleset armazenado ilegível"
+	msgRulesetProcedencia = "procedência do ruleset armazenado não corresponde à linha"
+)
+
+// decodificarRuleset reconstrói a Definicao gravada na coluna jsonb.
+//
+// Pura, sem ctx e sem I/O, como prepararRulesets. Falha de decodificação OU de
+// Validar é CORRUPÇÃO DE SERVIDOR: dado que o próprio servidor validou e gravou
+// voltando inválido não é culpa de quem fez a requisição, então vira
+// *ErroAplicacao (500) e NUNCA *ErroValidacao (400).
+//
+// O *ErroValidacao original não é encadeado de propósito: errors.Envolver não
+// reclassifica, e errors.Como acharia o *ErroValidacao, fazendo
+// rotasutil.Classificar responder 400 com os nomes de campo em razoes. Da
+// mensagem de Validar sai SÓ o nome do campo (vocabulário fechado de
+// invalido()), nunca o valor lido nem CampoInvalido.Mensagem.
+//
+// Sem DisallowUnknownFields: o que quebraria não é ler linha antiga com binário
+// novo (campo ausente vira zero-value), e sim ler linha NOVA com binário
+// ANTIGO — rollback ou fleet em versões mistas viraria 500 em toda leitura.
+func decodificarRuleset(dados []byte) (ruleset.Definicao, error) {
+	// Segunda guarda, defesa em profundidade: quem protege a memória do worker é
+	// o teto no SQL de ObterPorID, porque o Scan já materializou o payload aqui.
+	if len(dados) == 0 || len(dados) > limiteDefinicaoBytes {
+		return ruleset.Definicao{}, errors.NovoErroAplicacao(msgRulesetAcimaDoTeto)
+	}
+	var definicao ruleset.Definicao
+	if err := json.Unmarshal(dados, &definicao); err != nil {
+		return ruleset.Definicao{}, errors.NovoErroAplicacao(msgRulesetIlegivel)
+	}
+	if err := definicao.Validar(); err != nil {
+		campo := "desconhecido"
+		var validacao *errors.ErroValidacao
+		if errors.Como(err, &validacao) && len(validacao.Campos) > 0 {
+			campo = validacao.Campos[0].Campo
+		}
+		return ruleset.Definicao{}, errors.NovoErroAplicacao("ruleset armazenado reprovou no campo " + campo)
+	}
+	return definicao, nil
+}
+
+var _ contracts.ConsultaRulesetRepo = (*RepositorioRuleset)(nil)

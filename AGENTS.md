@@ -33,6 +33,8 @@ cd frontend && npm run dev
 - `docs/estado-do-backend.md`: estado medido e pendências.
 - `docs/plano-backend.md`: fases e critérios vigentes do backend.
 - `docs/retomada.md`: onde a última sessão parou e qual é a próxima tarefa.
+- `docs/spec-ativa.json`: contrato executável do recorte atual; uma única spec,
+  gerada pela skill `.agents/skills/spec-verificavel/SKILL.md`.
 - `docs/contrato-api.md`: comportamento público para quem desenvolve o frontend.
 - `docs/plano.md`: histórico de produto/stack, não roteiro de implementação.
 - `CLAUDE.md` e `.claude/agents/*.md` são as fontes das instruções;
@@ -138,14 +140,56 @@ sempre reproduzível.
 ## Time de agentes
 
 `.codex/agents/` tem seis agentes: `orquestrador`, `investigador`, `codador`,
-`testador`, `validador`, `seguranca`. O ciclo é
-investigar → (teste que falha) → codar → testar/validar/segurança em paralelo →
-retrabalho ou fechamento. Validador e segurança são somente leitura: reportam,
-nunca corrigem.
+`testador`, `validador`, `seguranca`. O ciclo continua: spec → RED → código →
+testes/revisões → retrabalho ou fechamento. O investigador usa a skill
+spec-verificavel; não há um sétimo agente duplicando essa tarefa.
+
+## Contexto, compactação e delegação
+
+- Comece por `docs/README.md`, retomada e `git status`; carregue só a seção do
+  plano e os módulos necessários. Use `rg` no mapa antes de varrer arquivos.
+  Não releia fontes inalteradas nem envie histórico completo a outro agente.
+- Spec e autoverificação têm uma fonte: `docs/spec-ativa.json`. Critérios recebem
+  IDs ligados a contratos, testes e comandos. Autoverificação estrutural não
+  comprova comportamento nem substitui validador/segurança. Spec herdada continua
+  exigindo pré-auditoria (regra 13). Não peça de novo decisão já autorizada.
+- Delegue trabalho delimitado que possa avançar em paralelo. Como padrão, até
+  dois agentes ativos; até três no fechamento (testador, validador, segurança).
+  Não use seis agentes simultâneos nem reabra investigação sem fato novo.
+  Mudança trivial/documental pode ser feita pelo principal com verificação
+  proporcional; não crie RED artificial. Mantenha independência nas revisões.
+- Cada chamada informa objetivo, IDs dos critérios, arquivos permitidos,
+  leitura essencial, dependências e entrega esperada. Um escritor por arquivo;
+  investigador e auditores não editam. Não reverta mudanças de outros agentes.
+  Reuse agente com contexto útil; encerre os concluídos. Disponibilidade e
+  nomes das ferramentas são os da IDE atual, não de sessões antigas.
+- Retornos curtos: decisão, arquivos/linhas, evidência real, lacunas e próximo
+  passo (alvo de 300 palavras, ampliado se necessário para achados). Não copie
+  a spec no retorno. O principal integra; não refaz o trabalho delegado.
+- Atribua um responsável para a suíte global. Demais agentes rodam o focal ou
+  revisão estática; só repita após mudança, falha ou evidência perdida. Cada
+  medição informa data, comando, escopo e resultado. Sem resultado recuperável,
+  não declare PASS. Build/vet/gofmt (regra 10) e lint continuam no fechamento.
+- Consulte a quota antes de delegar e após cada entrega. Em torno de 80%, não
+  abra novo recorte; perto de 90%, encerre trabalho em ponto seguro, registre
+  pendências e pause. Não consumir reset sem autorização. Quota de uso e janela
+  de contexto são medidas diferentes; se indisponíveis, não invente percentuais.
+- Antes de compactar ou pausar, atualize **só** `docs/retomada.md`: objetivo,
+  spec/IDs, decisões, arquivos e mudanças alheias, evidências, achados pendentes,
+  agentes/comandos ainda ativos e próximo comando. Compactação manual depende
+  da IDE; salvar checkpoint não significa que ela foi executada.
+- Retomada após compactação confere checkpoint + git + delta, sem reiniciar
+  tudo. Informação durável vai para estado/plano/mapa/contrato API. Não criar
+  `sessao-*.md`, fichas, prompts ou relatórios novos por entrega. Substitua a
+  spec ativa só após preservar pendências; histórico continua no Git.
+
+Skills locais têm fonte em `.agents/skills/`; o Claude pode usar links em
+`.claude/skills/`. Regras comuns vivem aqui, papéis nos seis agentes; não criar
+mais uma cópia para outra IDE. Regenerar as instruções Codex pelo script.
 
 ## Fases
 
-F0 fundação ✅ · F1 ingestão e preview síncrono ✅ · F2 parser e CDM em andamento · F3 motor de formatação ·
+F0 fundação ✅ · F1 ingestão e preview síncrono ✅ · F2 parser e CDM funcional ✅ · F3 motor de formatação em andamento ·
 F4 citações e referências · F5 fallback de LLM · F6 tabelas/figuras e revistas
 reais · F7 auth e formatos extras.
 

@@ -1,6 +1,7 @@
 package arquitetura_test
 
 import (
+	"bytes"
 	"os/exec"
 	"strings"
 	"testing"
@@ -75,9 +76,11 @@ func TestDetectorDeInfraNoDominio(t *testing.T) {
 func TestDominioNaoImportaInfra(t *testing.T) {
 	comando := exec.CommandContext(t.Context(), "go", "list", "-f", `{{.ImportPath}}|{{join .Imports " "}}`, "./internal/domain/...")
 	comando.Dir = "../.."
-	saida, err := comando.CombinedOutput()
+	var saidaErro bytes.Buffer
+	comando.Stderr = &saidaErro
+	saida, err := comando.Output()
 	if err != nil {
-		t.Fatalf("listar importações do domínio: %v\n%s", err, saida)
+		t.Fatalf("listar importações do domínio: %v\nstderr:\n%s\nstdout:\n%s", err, saidaErro.String(), saida)
 	}
 
 	var pacotesVerificados int

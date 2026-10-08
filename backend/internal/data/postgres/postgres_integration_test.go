@@ -868,3 +868,371 @@ func TestExecucaoSalvarConcorrente(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, entity.StatusConcluido, relido.Status, "a vencedora precisa ter persistido de fato")
 }
+
+// inserirRulesetFixtureSQL grava uma linha em rulesets por SQL direto, com
+// slug aleatório para que subtestes não colidam em
+// rulesets_slug_versao_unico. Por INSERT direto e NÃO por Semear: Semear
+// valida a definição e abre transação própria, o que acoplaria estas
+// fixtures ao caminho de seed em vez de ao estado de tabela que o gate lê.
+//
+// A limpeza no fim do teste (jobs que referenciam o perfil primeiro, por
+// causa de ON DELETE RESTRICT, depois o perfil) garante apenas que as
+// fixtures do gate não acumulem linhas e não colidam entre si em
+// rulesets_slug_versao_unico. Ela NÃO torna nenhum teste independente da
+// ordem: outros arquivos do pacote semeiam rulesets e não limpam, então
+// nenhum teste daqui pode depender do conteúdo global da tabela.
+func inserirRulesetFixtureSQL(ctx context.Context, t *testing.T, ativo bool) uuid.UUID {
+	t.Helper()
+	var id uuid.UUID
+	err := bancoSQL.QueryRowContext(ctx,
+		`INSERT INTO rulesets (slug, versao, nome, definicao, checksum, ativo)
+		 VALUES ($1, 1, 'Perfil de teste', '{}'::jsonb, $2, $3) RETURNING id`,
+		"fixture-"+uuid.NewString(), uuid.NewString(), ativo).Scan(&id)
+	require.NoError(t, err)
+	t.Cleanup(func() { //nolint:contextcheck // contexto próprio: o do teste já pode estar cancelado quando a limpeza roda.
+		ctxLimpeza, cancelar := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancelar()
+		_, err := bancoSQL.ExecContext(ctxLimpeza, `DELETE FROM jobs WHERE ruleset_id = $1`, id)
+		assert.NoError(t, err)
+		_, err = bancoSQL.ExecContext(ctxLimpeza, `DELETE FROM rulesets WHERE id = $1`, id)
+		assert.NoError(t, err)
+	})
+	return id
+}
+
+// exigirErroGateDeRuleset exige que err seja o erro do gate de perfil:
+// *errors.ErroValidacao com exatamente um campo reprovado, ruleset_id.
+// Devolve o VALOR do erro para que os chamadores comparem casos entre si —
+// ausente e inativo têm de ser indistinguíveis, inclusive na Mensagem do
+// envelope.
+func exigirErroGateDeRuleset(t *testing.T, err error) errors.ErroValidacao {
+	t.Helper()
+	require.Error(t, err)
+	var validacao *errors.ErroValidacao
+	require.ErrorAsf(t, err, &validacao, "esperava erro de validação do gate de perfil, veio %T: %v", err, err)
+	require.Lenf(t, validacao.Campos, 1, "esperava um só campo reprovado, obteve %v", validacao.Campos)
+	require.Equal(t, "ruleset_id", validacao.Campos[0].Campo)
+	return *validacao
+}
+
+func contarJobsDaChave(ctx context.Context, t *testing.T, documentoID, chave uuid.UUID) int {
+	t.Helper()
+	var contagem int
+	require.NoError(t, bancoSQL.QueryRowContext(ctx,
+		`SELECT count(*) FROM jobs WHERE documento_id=$1 AND chave_idempotencia=$2`,
+		documentoID, chave).Scan(&contagem))
+	return contagem
+}
+
+// TestInserirOuObterComPerfilAtivoCria cobre A6 e é o controle de
+// não-bloqueio de A9: com perfil existente e ativo, o caminho feliz segue
+// criando o job e gravando o ruleset_id informado.
+func TestInserirOuObterComPerfilAtivoCria(t *testing.T) {
+	ctx := context.Background()
+	criacao := gerente.JobsCriacao()
+
+	dono, err := vo.NovoDonoUsuario(criarUsuario(t))
+	require.NoError(t, err)
+	documento := inserirDocumento(ctx, t, dono, 100)
+	rulesetID := inserirRulesetFixtureSQL(ctx, t, true)
+
+	chave := uuid.New()
+	job, err := entity.NovoJob(documento.ID, entity.TipoFormatar, &rulesetID)
+	require.NoError(t, err)
+
+	criado, err := criacao.InserirOuObter(ctx, dono, job, chave)
+	require.NoErrorf(t, err, "perfil ativo não pode ser recusado: %v", err)
+	assert.Equal(t, job.ID, criado.ID)
+	require.NotNil(t, criado.RulesetID)
+	assert.Equal(t, rulesetID, *criado.RulesetID)
+
+	var gravado uuid.UUID
+	require.NoError(t, bancoSQL.QueryRowContext(ctx,
+		`SELECT ruleset_id FROM jobs WHERE documento_id=$1 AND chave_idempotencia=$2`,
+		documento.ID, chave).Scan(&gravado))
+	assert.Equal(t, rulesetID, gravado)
+}
+
+// TestInserirOuObterRecusaPerfilInativoEAusente cobre A7: job NOVO contra
+// perfil inativo e contra perfil inexistente têm de receber o MESMO valor de
+// erro de validação em ruleset_id, e nenhuma linha pode sobrar em jobs.
+//
+// Os dois casos usam UUIDs DIFERENTES de propósito: a igualdade dos valores
+// de erro é o que prova que o id recebido do cliente não é interpolado na
+// mensagem, isto é, que o gate não serve como oráculo de enumeração do
+// catálogo.
+//
+// Este critério prova classificação e ausência de linha; NÃO prova ordem em
+// relação ao INSERT, porque inserir e mapear o SQLSTATE 23503 também
+// devolveria ErroValidacao. Quem prova ordem e modo de lock é A9.
+func TestInserirOuObterRecusaPerfilInativoEAusente(t *testing.T) {
+	ctx := context.Background()
+	criacao := gerente.JobsCriacao()
+
+	dono, err := vo.NovoDonoUsuario(criarUsuario(t))
+	require.NoError(t, err)
+	documento := inserirDocumento(ctx, t, dono, 100)
+
+	perfilInativo := inserirRulesetFixtureSQL(ctx, t, false)
+	perfilAusente := uuid.New()
+	require.NotEqual(t, perfilInativo, perfilAusente)
+	var existe int
+	require.ErrorIsf(t,
+		bancoSQL.QueryRowContext(ctx, `SELECT 1 FROM rulesets WHERE id=$1`, perfilAusente).Scan(&existe),
+		sql.ErrNoRows, "pré-condição: o perfil do caso 'ausente' não pode existir")
+
+	var contagemAntes int
+	require.NoError(t, bancoSQL.QueryRowContext(ctx,
+		`SELECT count(*) FROM jobs WHERE documento_id=$1`, documento.ID).Scan(&contagemAntes))
+
+	erros := make(map[string]errors.ErroValidacao, 2)
+	for _, caso := range []struct {
+		nome      string
+		rulesetID uuid.UUID
+	}{
+		{nome: "perfil inativo", rulesetID: perfilInativo},
+		{nome: "perfil ausente do catálogo", rulesetID: perfilAusente},
+	} {
+		t.Run(caso.nome, func(t *testing.T) {
+			rulesetID := caso.rulesetID
+			job, err := entity.NovoJob(documento.ID, entity.TipoFormatar, &rulesetID)
+			require.NoError(t, err)
+
+			devolvido, err := criacao.InserirOuObter(ctx, dono, job, uuid.New())
+			erros[caso.nome] = exigirErroGateDeRuleset(t, err)
+			assert.Equal(t, entity.Job{}, devolvido)
+			assert.NotContains(t, err.Error(), rulesetID.String(), "o id recebido não pode aparecer na mensagem")
+		})
+	}
+
+	require.Len(t, erros, 2)
+	assert.Equal(t, erros["perfil inativo"], erros["perfil ausente do catálogo"],
+		"ausente e inativo têm de ser indistinguíveis no valor inteiro do erro, senão o gate enumera o catálogo")
+
+	var contagemDepois int
+	require.NoError(t, bancoSQL.QueryRowContext(ctx,
+		`SELECT count(*) FROM jobs WHERE documento_id=$1`, documento.ID).Scan(&contagemDepois))
+	assert.Equal(t, contagemAntes, contagemDepois, "gate reprovado não pode deixar linha em jobs")
+}
+
+// TestInserirOuObterRepeticaoVenceGateDePerfil cobre A8, a razão de I1
+// existir: depois de o perfil ser desativado, repetir a MESMA chave com o
+// mesmo payload continua devolvendo o job existente com erro nil. Falha se o
+// gate rodar antes de a repetição ser resolvida, e é o que protege a
+// repetição terminal que CriacaoJobRepo promete.
+func TestInserirOuObterRepeticaoVenceGateDePerfil(t *testing.T) {
+	ctx := context.Background()
+	criacao := gerente.JobsCriacao()
+
+	dono, err := vo.NovoDonoUsuario(criarUsuario(t))
+	require.NoError(t, err)
+	documento := inserirDocumento(ctx, t, dono, 100)
+	rulesetID := inserirRulesetFixtureSQL(ctx, t, true)
+
+	chave := uuid.New()
+	job, err := entity.NovoJob(documento.ID, entity.TipoFormatar, &rulesetID)
+	require.NoError(t, err)
+
+	primeiro, err := criacao.InserirOuObter(ctx, dono, job, chave)
+	require.NoError(t, err)
+
+	resultado, err := bancoSQL.ExecContext(ctx, `UPDATE rulesets SET ativo=false WHERE id=$1`, rulesetID)
+	require.NoError(t, err)
+	afetadas, err := resultado.RowsAffected()
+	require.NoError(t, err)
+	require.Equal(t, int64(1), afetadas, "pré-condição: o perfil tem de ter sido desativado")
+
+	repetido, err := criacao.InserirOuObter(ctx, dono, job, chave)
+	require.NoErrorf(t, err, "repetição de chave ocupada não pode falhar pelo estado atual do perfil: %v", err)
+	assert.Equal(t, primeiro, repetido, "a repetição devolve o job existente, campo a campo")
+	assert.Equal(t, 1, contarJobsDaChave(ctx, t, documento.ID, chave))
+}
+
+// TestInserirOuObterGateDePerfilUsaForShare cobre A9, a prova determinística
+// do MODO de lock, com a direção invertida para não precisar de seam dentro
+// de InserirOuObter (seam seria código de teste em produção, e var de pacote
+// é proibida pela regra 4).
+//
+// Uma segunda conexão abre transação e executa UPDATE rulesets SET
+// ativo=false SEM commitar, o que deixa a linha sob FOR NO KEY UPDATE. Então
+// InserirOuObter é chamado com um contexto cujo deadline limita a CHAMADA
+// INTEIRA (Begin + FOR SHARE do documento + gate), para que o contexto vença
+// de forma determinística.
+//
+// Discrimina as três variantes de desenho: FOR SHARE conflita com FOR NO KEY
+// UPDATE e bloqueia; FOR KEY SHARE (que é o que a checagem de FK do INSERT
+// toma sozinha) NÃO conflita e passaria; nenhum lock também passaria.
+//
+// A segunda metade da asserção — o erro NÃO é *errors.ErroValidacao — é o
+// que impede uma implementação de mapear qualquer falha da query do perfil
+// para "perfil inativo", mascarando infraestrutura como culpa do cliente
+// (I7). Uma asserção só, de modo de lock: que a desativação COMMITADA vire
+// ErroValidacao é A7 e não se repete aqui. Sem sleep e sem pg_locks; o
+// controle de não-bloqueio é A6.
+func TestInserirOuObterGateDePerfilUsaForShare(t *testing.T) {
+	ctx := context.Background()
+	criacao := gerente.JobsCriacao()
+
+	dono, err := vo.NovoDonoUsuario(criarUsuario(t))
+	require.NoError(t, err)
+	documento := inserirDocumento(ctx, t, dono, 100)
+	rulesetID := inserirRulesetFixtureSQL(ctx, t, true)
+
+	tx, err := bancoSQL.BeginTx(ctx, nil)
+	require.NoError(t, err)
+	// Rollback após o teste: a transação fica pendente de propósito, e nunca
+	// commita, para não transformar isto no caso de A7.
+	defer func() { _ = tx.Rollback() }()
+	resultado, err := tx.ExecContext(ctx, `UPDATE rulesets SET ativo=false WHERE id=$1`, rulesetID)
+	require.NoError(t, err)
+	afetadas, err := resultado.RowsAffected()
+	require.NoError(t, err)
+	require.Equal(t, int64(1), afetadas, "pré-condição: o UPDATE pendente tem de ter pegado a linha do perfil")
+
+	chave := uuid.New()
+	job, err := entity.NovoJob(documento.ID, entity.TipoFormatar, &rulesetID)
+	require.NoError(t, err)
+
+	ctxCurto, cancelar := context.WithTimeout(ctx, 200*time.Millisecond)
+	defer cancelar()
+	devolvido, err := criacao.InserirOuObter(ctxCurto, dono, job, chave)
+
+	require.Errorf(t, err, "a leitura do perfil tem de BLOQUEAR no UPDATE pendente; FOR KEY SHARE ou nenhum lock passariam")
+	assert.Truef(t, errors.E(err, context.DeadlineExceeded),
+		"esperava prazo excedido por espera de lock, veio %T: %v", err, err)
+	var validacao *errors.ErroValidacao
+	assert.Falsef(t, errors.Como(err, &validacao),
+		"falha de infraestrutura na leitura do perfil não pode virar 'perfil inativo' (400): %v", err)
+	assert.Equal(t, entity.Job{}, devolvido)
+	assert.Equal(t, 0, contarJobsDaChave(ctx, t, documento.ID, chave))
+}
+
+// TestInserirOuObterChaveOcupadaDeOutroDonoNaoVaza cobre A10: o IDOR que o
+// caminho de repetição cria e que nenhum teste existente cobre.
+// TestInserirOuObterDocumentoDeTerceiro:551 usa chave NOVA, logo prova a
+// reautorização do documento e NUNCA o caminho de repetição.
+//
+// Os dois casos atacam os dois ramos da cláusula de autorização
+// (usuario_id = $2 OR sessao_id = $3) sobre chave JÁ OCUPADA. Caminho
+// concreto do dano: um refator plausível ("não travar o documento se o job já
+// existe") que resolva a repetição antes de reautorizar passaria a devolver
+// id, status, tentativas e resultado de job alheio a quem conheça dois UUIDs.
+func TestInserirOuObterChaveOcupadaDeOutroDonoNaoVaza(t *testing.T) {
+	ctx := context.Background()
+	criacao := gerente.JobsCriacao()
+
+	for _, caso := range []struct {
+		nome  string
+		donos func(*testing.T) (vo.Dono, vo.Dono)
+	}{
+		{
+			nome: "terceiro sobre documento de outro usuário",
+			donos: func(t *testing.T) (vo.Dono, vo.Dono) {
+				t.Helper()
+				proprietario, err := vo.NovoDonoUsuario(criarUsuario(t))
+				require.NoError(t, err)
+				terceiro, err := vo.NovoDonoUsuario(criarUsuario(t))
+				require.NoError(t, err)
+				return proprietario, terceiro
+			},
+		},
+		{
+			nome: "dono de sessão revogada sobre o próprio documento",
+			donos: func(t *testing.T) (vo.Dono, vo.Dono) {
+				t.Helper()
+				proprietario, err := vo.NovoDonoSessao(uuid.New())
+				require.NoError(t, err)
+				revogada, err := vo.NovoDonoSessao(uuid.New())
+				require.NoError(t, err)
+				return proprietario, revogada
+			},
+		},
+	} {
+		t.Run(caso.nome, func(t *testing.T) {
+			donoReal, solicitante := caso.donos(t)
+			documento := inserirDocumento(ctx, t, donoReal, 100)
+
+			chave := uuid.New()
+			job, err := entity.NovoJob(documento.ID, entity.TipoAnalisar, nil)
+			require.NoError(t, err)
+			existente, err := criacao.InserirOuObter(ctx, donoReal, job, chave)
+			require.NoError(t, err)
+			require.Equal(t, 1, contarJobsDaChave(ctx, t, documento.ID, chave), "pré-condição: a chave tem de estar OCUPADA")
+
+			devolvido, err := criacao.InserirOuObter(ctx, solicitante, job, chave)
+			var naoEncontrado *errors.ErroNaoEncontrado
+			require.ErrorAsf(t, err, &naoEncontrado, "esperava não-encontrado, veio %T: %v", err, err)
+			assert.Equal(t, entity.Job{}, devolvido, "não pode devolver campo algum do job existente")
+			assert.NotContains(t, err.Error(), existente.ID.String())
+			assert.NotContains(t, err.Error(), documento.ID.String())
+		})
+	}
+}
+
+// TestInserirOuObterAnalisarSemRuleset cobre A11: tipo que não exige perfil
+// é criado normalmente, com RulesetID nil no job persistido. Mata a mutação
+// "o gate vale para todos os tipos": aplicado a TipoAnalisar, o RulesetID nil
+// cairia na guarda de perfil ausente e a criação falharia.
+//
+// Sem pré-condição sobre o conteúdo global de rulesets: outros arquivos do
+// pacote semeiam perfis e não limpam, logo contar a tabela aqui seria
+// dependência de ordem, não asserção de comportamento. E a contagem não
+// provaria nada de novo: se a implementação rodasse o SELECT
+// incondicionalmente, RulesetID nil viraria `WHERE id IS NULL`, sem linha e
+// sem lock, com resultado idêntico — o skip da query é inobservável por aqui
+// (I3, mesmo motivo de A13).
+func TestInserirOuObterAnalisarSemRuleset(t *testing.T) {
+	ctx := context.Background()
+	criacao := gerente.JobsCriacao()
+
+	dono, err := vo.NovoDonoUsuario(criarUsuario(t))
+	require.NoError(t, err)
+	documento := inserirDocumento(ctx, t, dono, 100)
+
+	chave := uuid.New()
+	job, err := entity.NovoJob(documento.ID, entity.TipoAnalisar, nil)
+	require.NoError(t, err)
+
+	criado, err := criacao.InserirOuObter(ctx, dono, job, chave)
+	require.NoErrorf(t, err, "o gate não pode alcançar tipo que não exige perfil: %v", err)
+	assert.Equal(t, job.ID, criado.ID)
+	assert.Nil(t, criado.RulesetID)
+	assert.Equal(t, 1, contarJobsDaChave(ctx, t, documento.ID, chave))
+}
+
+// TestInserirOuObterFormatarSemRulesetIDNaoDesreferenciaNil cobre A13.
+// InserirOuObter é porta pública e recebe entity.Job arbitrária de qualquer
+// chamador futuro, não só do serviço que passa por NovoJob — por isso o job
+// é montado por LITERAL, com TipoFormatar e RulesetID nil, combinação que
+// NovoJob recusaria antes de chegar aqui.
+//
+// Uma implementação com *job.RulesetID direto entraria em nil deref e viraria
+// 500. O erro tem de ser o MESMO de A7. NÃO afirma nada sobre a query ao
+// catálogo: inobservável pelo mesmo motivo de I3.
+func TestInserirOuObterFormatarSemRulesetIDNaoDesreferenciaNil(t *testing.T) {
+	ctx := context.Background()
+	criacao := gerente.JobsCriacao()
+
+	dono, err := vo.NovoDonoUsuario(criarUsuario(t))
+	require.NoError(t, err)
+	documento := inserirDocumento(ctx, t, dono, 100)
+
+	chaveSemRuleset := uuid.New()
+	semRuleset := entity.Job{
+		ID: uuid.New(), DocumentoID: documento.ID, RulesetID: nil,
+		Tipo: entity.TipoFormatar, Status: entity.StatusPendente, CriadoEm: time.Now().UTC(),
+	}
+	devolvido, err := criacao.InserirOuObter(ctx, dono, semRuleset, chaveSemRuleset)
+	erroSemRuleset := exigirErroGateDeRuleset(t, err)
+	assert.Equal(t, entity.Job{}, devolvido)
+	assert.Equal(t, 0, contarJobsDaChave(ctx, t, documento.ID, chaveSemRuleset))
+
+	// Referência de igualdade produzida pelo caminho de A7 (perfil ausente do
+	// catálogo), no mesmo teste, para não depender da ordem de execução.
+	perfilAusente := uuid.New()
+	candidato, err := entity.NovoJob(documento.ID, entity.TipoFormatar, &perfilAusente)
+	require.NoError(t, err)
+	_, err = criacao.InserirOuObter(ctx, dono, candidato, uuid.New())
+	assert.Equal(t, exigirErroGateDeRuleset(t, err), erroSemRuleset,
+		"RulesetID nil tem de dar exatamente o mesmo erro de perfil ausente")
+}

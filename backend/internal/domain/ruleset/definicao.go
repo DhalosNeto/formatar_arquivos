@@ -103,6 +103,11 @@ func (pagina Pagina) validar() error {
 	return validarEixo(pagina.AlturaCM, pagina.Margens.SuperiorCM, pagina.Margens.InferiorCM)
 }
 
+// Validar confere as dimensões e margens da página sem exigir o restante do ruleset.
+func (pagina Pagina) Validar() error {
+	return pagina.validar()
+}
+
 func validarEixo(dimensao, margemInicial, margemFinal float64) error {
 	tamanho, err := vo.CentimetrosParaTwips(dimensao)
 	if err != nil || tamanho <= 0 {
@@ -122,23 +127,80 @@ func validarEixo(dimensao, margemInicial, margemFinal float64) error {
 	return nil
 }
 
-func (corpo Corpo) validar() error {
-	if !textoValido(corpo.Fonte, 100) {
-		return invalido("corpo.fonte")
-	}
-	switch corpo.Alinhamento {
+// ValidarAlinhamento valida o alinhamento isoladamente, sem exigir um Corpo completo.
+func ValidarAlinhamento(alinhamento string) error {
+	switch alinhamento {
 	case "esquerda", "direita", "centralizado", "justificado":
+		return nil
 	default:
 		return invalido("corpo.alinhamento")
+	}
+}
+
+// ValidarEntrelinha confere um múltiplo isolado, inclusive sua representação inteira.
+// Zero após arredondamento não representa uma entrelinha válida.
+func ValidarEntrelinha(multiplo float64) error {
+	unidades, err := vo.EntrelinhaParaUnidades(multiplo)
+	if err != nil || unidades <= 0 {
+		return invalido("corpo")
+	}
+	return nil
+}
+
+// ValidarRecuoCM aceita recuo não negativo que possa ser representado em twips.
+func ValidarRecuoCM(recuo float64) error {
+	if _, err := vo.CentimetrosParaTwips(recuo); err != nil {
+		return invalido("corpo.recuo")
+	}
+	return nil
+}
+
+// ValidarFonteCorpo aceita somente nomes que podem ser escritos em XML 1.0.
+func ValidarFonteCorpo(fonte string) error {
+	if !textoValido(fonte, 100) {
+		return invalido("corpo.fonte")
+	}
+	for _, caractere := range fonte {
+		if caractere != '\t' && caractere != '\n' && caractere != '\r' &&
+			(caractere < 0x20 || caractere > 0x10ffff ||
+				caractere >= 0xd800 && caractere <= 0xdfff ||
+				caractere >= 0xfffe && caractere <= 0xffff) {
+			return invalido("corpo.fonte")
+		}
+	}
+	return nil
+}
+
+// ValidarTamanhoCorpoPT exige tamanho representável e positivo em meios-pontos.
+func ValidarTamanhoCorpoPT(tamanho float64) error {
+	convertido, err := vo.PontosParaMeiosPontos(tamanho)
+	if err != nil || convertido <= 0 {
+		return invalido("corpo.tamanho")
+	}
+	return nil
+}
+
+func (corpo Corpo) validar() error {
+	if err := ValidarFonteCorpo(corpo.Fonte); err != nil {
+		return err
+	}
+	if err := ValidarTamanhoCorpoPT(corpo.TamanhoPT); err != nil {
+		return err
+	}
+	if err := ValidarAlinhamento(corpo.Alinhamento); err != nil {
+		return err
+	}
+	if err := ValidarEntrelinha(corpo.Entrelinha); err != nil {
+		return err
+	}
+	if err := ValidarRecuoCM(corpo.RecuoCM); err != nil {
+		return err
 	}
 	medidas := []struct {
 		valor     float64
 		converter func(float64) (int, error)
 		positivo  bool
 	}{
-		{corpo.TamanhoPT, vo.PontosParaMeiosPontos, true},
-		{corpo.Entrelinha, vo.EntrelinhaParaUnidades, true},
-		{corpo.RecuoCM, vo.CentimetrosParaTwips, false},
 		{corpo.EspacoAntesPT, vo.PontosParaTwips, false},
 		{corpo.EspacoDepoisPT, vo.PontosParaTwips, false},
 	}

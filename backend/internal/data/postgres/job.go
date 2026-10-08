@@ -79,8 +79,20 @@ func (r *RepositorioJob) ListarPorDocumento(ctx context.Context, solicitante vo.
 }
 
 // InserirOuObter é a única transação do sistema: revalida a autorização do
-// documento e decide entre inserir o candidato ou devolver o job já existente
-// para a mesma chave, tudo atomicamente.
+// documento, aplica o gate de perfil de formatação e decide entre inserir o
+// candidato ou devolver o job já existente para a mesma chave, tudo
+// atomicamente. A ordem é autorização → gate → INSERT → releitura: nenhuma
+// repetição é resolvida antes de o documento ser reautorizado, senão quem
+// conhecesse dois UUIDs receberia job de documento alheio.
+//
+// O gate recusa job NOVO cujo tipo exige ruleset contra perfil ausente ou
+// inativo, mas repetição vence o gate: chave já ocupada devolve o job
+// existente qualquer que seja o estado atual do perfil. Ele roda ANTES do
+// INSERT, e não depois, por motivo de LOCK: a checagem de FK do INSERT toma
+// FOR KEY SHARE na linha de rulesets, que NÃO conflita com o FOR NO KEY UPDATE
+// de um `UPDATE ativo=false` pendente — validar depois nunca obteria o lock
+// necessário. Secundariamente, evita acoplar mensagem de domínio a nome de
+// constraint (SQLSTATE 23503/23514, que hoje virariam 500).
 func (r *RepositorioJob) InserirOuObter(ctx context.Context, solicitante vo.Dono, job entity.Job, chave uuid.UUID) (entity.Job, error) {
 	if chave == uuid.Nil {
 		return entity.Job{}, errors.NovoErroValidacao("chave_idempotencia", "obrigatória")
@@ -93,6 +105,27 @@ func (r *RepositorioJob) InserirOuObter(ctx context.Context, solicitante vo.Dono
 	// Rollback após Commit devolve pgx.ErrTxClosed; é esperado e descartado, não
 	// há nada a fazer com esse erro depois que a transação já foi decidida.
 	defer func() { _ = tx.Rollback(ctx) }()
+
+	// Esta transação espera por lock em dois pontos (documentos e rulesets) e o
+	// pool tem só 10 conexões por padrão (config.go:77), sem statement_timeout
+	// nem prazo por requisição: sem teto, uma chamada presa retém uma das 10
+	// indefinidamente.
+	//
+	// O teto efetivo em produção é ESTE valor, não o prazo de quem chama: não
+	// existe deadline por requisição no caminho HTTP — os únicos WithTimeout do
+	// projeto são o do health check (saude/controlador.go:91) e o do desligamento
+	// (cmd/api/main.go:121). E lock_timeout é POR AQUISIÇÃO, então documentos
+	// mais rulesets somam até o dobro retendo a mesma conexão. Dez requisições
+	// concorrentes ainda esgotam o pool por esse intervalo se um operador deixar
+	// transação aberta em rulesets; fechar isso exige prazo por requisição, que
+	// é recorte próprio.
+	//
+	// Nos testes de integração o contexto vence primeiro, porque eles passam
+	// deadline curto de propósito para provar o modo de lock — não confundir
+	// esse comportamento de teste com o de produção.
+	if _, err := tx.Exec(ctx, `SET LOCAL lock_timeout = '3s'`); err != nil {
+		return entity.Job{}, envolverPostgres(err, "limitar espera por lock na criação de job")
+	}
 
 	usuarioID, sessaoID := solicitante.ParaColunas()
 	// FOR SHARE trava a linha do documento até o fim da transação, para que um
@@ -108,6 +141,43 @@ func (r *RepositorioJob) InserirOuObter(ctx context.Context, solicitante vo.Dono
 			return entity.Job{}, errors.NovoErroNaoEncontrado("job")
 		}
 		return entity.Job{}, envolverPostgres(err, "reautorizar documento na criação de job")
+	}
+
+	if job.Tipo.ExigeRuleset() {
+		// FOR SHARE na linha do perfil, na MESMA transação: segura a desativação
+		// até o INSERT. RulesetID nil não consulta nada e não é desreferenciado —
+		// InserirOuObter é porta pública e recebe entity.Job arbitrária. nil só
+		// pode significar ausente CONFIRMADO (pgx.ErrNoRows); qualquer outro erro
+		// é infraestrutura e sai por envolverPostgres, nunca como validação.
+		var ativo *bool
+		if job.RulesetID != nil {
+			var lido bool
+			err = tx.QueryRow(ctx, `SELECT ativo FROM rulesets WHERE id = $1 FOR SHARE`, *job.RulesetID).Scan(&lido)
+			switch {
+			case err == nil:
+				ativo = &lido
+			case errors.E(err, pgx.ErrNoRows):
+				ativo = nil
+			default:
+				return entity.Job{}, envolverPostgres(err, "ler perfil de formatação na criação de job")
+			}
+		}
+		if erroGate := job.Tipo.ValidarRulesetParaNovoJob(ativo); erroGate != nil {
+			// Repetição vence o gate: a chave já ocupada devolve o job existente
+			// mesmo que o perfil tenha sido desativado depois de ele ser criado.
+			existente, achou, err := obterJobDaChave(ctx, tx, job.DocumentoID, chave)
+			if err != nil {
+				return entity.Job{}, err
+			}
+			if !achou {
+				// Rollback pelo defer: nada foi inserido.
+				return entity.Job{}, erroGate
+			}
+			if err := tx.Commit(ctx); err != nil {
+				return entity.Job{}, envolverPostgres(err, "confirmar releitura de job existente")
+			}
+			return existente, nil
+		}
 	}
 
 	var resultado []byte
@@ -140,20 +210,33 @@ func (r *RepositorioJob) InserirOuObter(ctx context.Context, solicitante vo.Dono
 	// Sob REPEATABLE READ/SERIALIZABLE a transação inteira usaria o snapshot do
 	// início do Begin, o SELECT não veria a linha alheia mesmo após o commit
 	// dela, e esta idempotência viraria erro em vez de devolver o job existente.
-	linhaExistente := tx.QueryRow(ctx,
-		`SELECT `+colunasJob+` FROM jobs WHERE documento_id = $1 AND chave_idempotencia = $2`,
-		job.DocumentoID, chave)
-	jobExistente, err := scanJob(linhaExistente)
+	jobExistente, achou, err := obterJobDaChave(ctx, tx, job.DocumentoID, chave)
 	if err != nil {
-		if errors.E(err, pgx.ErrNoRows) {
-			return entity.Job{}, errors.NovoErroAplicacao("criação de job entrou em conflito sem linha correspondente")
-		}
-		return entity.Job{}, envolverPostgres(err, "reler job existente")
+		return entity.Job{}, err
+	}
+	if !achou {
+		return entity.Job{}, errors.NovoErroAplicacao("criação de job entrou em conflito sem linha correspondente")
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return entity.Job{}, envolverPostgres(err, "confirmar releitura de job existente")
 	}
 	return jobExistente, nil
+}
+
+// obterJobDaChave lê, na transação em curso, o job que ocupa a chave de
+// idempotência do documento. Chave livre não é erro: devolve achou=false.
+func obterJobDaChave(ctx context.Context, tx pgx.Tx, documentoID, chave uuid.UUID) (entity.Job, bool, error) {
+	linha := tx.QueryRow(ctx,
+		`SELECT `+colunasJob+` FROM jobs WHERE documento_id = $1 AND chave_idempotencia = $2`,
+		documentoID, chave)
+	job, err := scanJob(linha)
+	if err != nil {
+		if errors.E(err, pgx.ErrNoRows) {
+			return entity.Job{}, false, nil
+		}
+		return entity.Job{}, false, envolverPostgres(err, "reler job existente")
+	}
+	return job, true, nil
 }
 
 // ObterPorIDInterno lê um job por ID sem restrição de dono: porta exclusiva

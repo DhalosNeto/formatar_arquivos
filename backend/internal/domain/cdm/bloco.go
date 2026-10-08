@@ -108,19 +108,19 @@ type Bloco struct {
 // NovoBloco valida os cinco campos de uma vez, acumulando todos os reprovados
 // em um único *errors.ErroValidacao.
 func NovoBloco(papel Papel, textoResumo string, confianca float64, origem Origem, refXML int) (Bloco, error) {
-	validacao := errors.NovoErroValidacaoCampos("bloco do cdm inválido")
+	validacao := errors.NovoErroValidacaoCampos(mensagemBlocoInvalido)
 
 	if !papel.Valido() {
-		validacao.Acrescentar("papel", "papel desconhecido ou seção fora da faixa 1..6")
+		validacao.Acrescentar("papel", mensagemPapelDesconhecido)
 	}
 	if confianca < 0 || confianca > 1 {
 		validacao.Acrescentar("confianca", "a confiança precisa estar entre 0 e 1")
 	}
 	if !origem.Valido() {
-		validacao.Acrescentar("origem", "origem de classificação desconhecida")
+		validacao.Acrescentar("origem", mensagemOrigemDesconhecida)
 	}
 	if refXML < 0 {
-		validacao.Acrescentar("ref_xml", "a referência ao nó XML é um índice ordinal, nunca negativo")
+		validacao.Acrescentar("ref_xml", mensagemRefXMLNegativo)
 	}
 
 	if validacao.TemCampos() {

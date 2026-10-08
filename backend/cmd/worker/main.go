@@ -13,10 +13,12 @@ import (
 	"time"
 
 	"github.com/daniel-halos/formatador/internal/data/postgres"
+	"github.com/daniel-halos/formatador/internal/domain/cdm"
 	"github.com/daniel-halos/formatador/internal/domain/documento/processamento"
 	"github.com/daniel-halos/formatador/internal/domain/job/execucao"
 	"github.com/daniel-halos/formatador/internal/infra/config"
 	"github.com/daniel-halos/formatador/internal/infra/fila"
+	"github.com/daniel-halos/formatador/internal/infra/llm"
 	"github.com/daniel-halos/formatador/internal/infra/log"
 	"github.com/daniel-halos/formatador/internal/infra/pdfconv"
 	"github.com/daniel-halos/formatador/internal/infra/storage"
@@ -78,7 +80,11 @@ func executar() error {
 		return err
 	}
 
-	executor, err := fila.NovoExecutorDocumento(documentosInternos, clienteStorage, conversor, registrador)
+	fallback, err := montarFallback(cfg.Jev)
+	if err != nil {
+		return err
+	}
+	executor, err := fila.NovoExecutorDocumento(documentosInternos, clienteStorage, conversor, registrador, fallback)
 	if err != nil {
 		return err
 	}
@@ -100,4 +106,20 @@ func executar() error {
 	}
 	registrador.Info("sinal de desligamento recebido, encerrando worker")
 	return nil
+}
+
+// montarFallback deixa o processamento determinístico intacto quando a flag está desligada.
+func montarFallback(cfg config.Jev) (*cdm.Fallback, error) {
+	if !cfg.Habilitado {
+		return nil, nil
+	}
+	cliente, err := llm.NovoClienteJev(cfg.ChaveAPI, cfg.Modelo)
+	if err != nil {
+		return nil, err
+	}
+	return cdm.NovoFallback(cliente, cdm.PoliticaConfianca{
+		LimiteConsulta:    cfg.LimiteConsulta,
+		LimiteConfirmacao: cfg.LimiteConfirmacao,
+		LimiteAutomatico:  cfg.LimiteAutomatico,
+	})
 }

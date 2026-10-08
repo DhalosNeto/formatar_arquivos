@@ -1,0 +1,216 @@
+{
+  "versao": 1,
+  "id": "f3-gate-ruleset-inativo",
+  "estado": "concluida",
+  "objetivo": "Impedir que job NOVO que exige ruleset seja criado contra perfil ausente ou inativo, sem quebrar a idempotência: repetição da mesma chave continua devolvendo o job existente, mesmo que o perfil tenha sido desativado depois.",
+  "fora_escopo": [
+    "Mover a decisão de conflito de payload do serviço para o adaptador. A divisão atual é intencional e testada (postgres_integration_test.go:622); só o COMENTÁRIO da porta será corrigido, que hoje promete conflito no adaptador.",
+    "Branch TipoFormatar no executor, campo de resultado no Documento, migration de resultado, upload e download.",
+    "context.Context nos sete mutadores OOXML: débito do recorte do executor.",
+    "Endpoint de catálogo de rulesets, listagem por slug/versão, ou desativar/reativar perfil por API.",
+    "Serializar criação por documento além do FOR SHARE já existente no documento, e trocar o nível de isolamento: a releitura idempotente DEPENDE de READ COMMITTED (job.go:136-143 documenta isso).",
+    "Verificar checksum do ruleset (débito registrado em docs/estado-do-backend.md)."
+  ],
+  "fontes": [
+    ".agents/skills/spec-verificavel/SKILL.md",
+    "CLAUDE.md",
+    "docs/estado-do-backend.md",
+    "backend/migrations/00001_esquema_inicial.sql",
+    "backend/migrations/README.md",
+    "backend/internal/domain/job/entity/tipo.go",
+    "backend/internal/domain/job/entity/job.go",
+    "backend/internal/domain/job/criacao/servico.go",
+    "backend/internal/domain/job/repository/criacao.go",
+    "backend/internal/data/postgres/job.go",
+    "backend/internal/data/postgres/ruleset.go"
+  ],
+  "arquivos": [
+    {
+      "caminho": "backend/internal/domain/job/entity/tipo.go",
+      "acao": "alterar",
+      "responsavel": "codador"
+    },
+    {
+      "caminho": "backend/internal/domain/job/entity/tipo_test.go",
+      "acao": "alterar",
+      "responsavel": "testador"
+    },
+    {
+      "caminho": "backend/internal/domain/job/repository/criacao.go",
+      "acao": "alterar",
+      "responsavel": "codador"
+    },
+    {
+      "caminho": "backend/internal/domain/ruleset/repository/ruleset.go",
+      "acao": "alterar",
+      "responsavel": "codador"
+    },
+    {
+      "caminho": "backend/internal/domain/job/criacao/servico_test.go",
+      "acao": "alterar",
+      "responsavel": "testador"
+    },
+    {
+      "caminho": "backend/internal/data/postgres/job.go",
+      "acao": "alterar",
+      "responsavel": "codador"
+    },
+    {
+      "caminho": "backend/internal/data/postgres/postgres_integration_test.go",
+      "acao": "alterar",
+      "responsavel": "testador"
+    }
+  ],
+  "contratos": [
+    {
+      "id": "C1",
+      "descricao": "func (tipo TipoJob) ValidarRulesetParaNovoJob(ativo *bool) error em backend/internal/domain/job/entity/tipo.go. Regra PURA, sem ctx e sem I/O. O parâmetro é *bool e nil significa PERFIL AUSENTE — assinatura escolhida para que a troca de parâmetros seja IMPOSSÍVEL, em vez de dois bool adjacentes cuja troca seria behavioralmente indetectável (ausente e inativo devolvem o mesmo erro por requisito de segurança). Se !tipo.ExigeRuleset(), devolve nil ignorando o parâmetro: análise e preview não escolhem norma, e tipo inválido também cai aqui, porque quem recusa tipo inválido é NovoJob (job.go:52) — duas portas com mensagens concorrentes no mesmo campo seria pior. Se exige e (ativo == nil || !*ativo), devolve *errors.ErroValidacao no campo ruleset_id, com valor de erro IDÊNTICO nos dois casos, incluindo o texto de Mensagem do envelope e o de Campos[].Mensagem: ausente e inativo não podem ser distinguíveis por nenhum dos dois textos, senão o gate vira oráculo de enumeração do catálogo. Não recebe UUID algum, o que torna estruturalmente impossível interpolar o id do cliente na mensagem. Reusa ExigeRuleset (tipo.go:24) e NÃO duplica a lista de tipos; registrar no comentário que ExigeRuleset é FAIL-OPEN para tipo novo (é `tipo == TipoFormatar`), logo um tipo futuro que exija norma escapa do gate em silêncio. Complementa NovoJob (job.go:51-56), que já exige RulesetID PRESENTE, com o mesmo campo ruleset_id: NovoJob valida o que se sabe sem banco, C1 o que só o banco sabe. REGISTRAR no comentário que o parâmetro nil significa AUSENTE CONFIRMADO, nunca 'não foi possível saber': quem chama só pode passar nil depois de uma leitura que devolveu zero linhas. Mapear falha de leitura para nil transformaria erro de infraestrutura em culpa do cliente (400), e é o que I7 e A9 existem para impedir."
+    },
+    {
+      "id": "C2",
+      "descricao": "Em backend/internal/data/postgres/job.go, InserirOuObter passa a aplicar o gate. O contrato é um conjunto de INVARIANTES, não uma ordem fixa de queries — a implementação escolhe o caminho mais barato que os satisfaça. (I0) A AUTORIZAÇÃO DO DOCUMENTO PRECEDE TUDO: o SELECT ... FOR SHARE em documentos (job.go:103-111) roda ANTES de resolver repetição e antes do gate. A ordem normativa é autorização → gate → INSERT → releitura. Sem isso, um implementador que leia I1 ao pé da letra pode resolver a repetição primeiro e devolver job de documento alheio a quem conheça dois UUIDs; A10 pega em teste, mas o contrato tem de dizer. (I1) REPETIÇÃO VENCE O GATE: se a chave (documento_id, chave_idempotencia) já está ocupada, devolve o job existente com erro nil, qualquer que seja o estado atual do perfil. Sem isso, repetir chave depois de o perfil ser desativado passaria a falhar, quebrando a repetição terminal que a porta promete e também o teste preexistente postgres_integration_test.go:622, que repete chave ocupada com ruleset inexistente. (I2) O GATE RODA ANTES DO INSERT, nunca depois. (I3 virou NOTA DE IMPLEMENTAÇÃO, não invariante normativo: convém que o gate só alcance tipo cujo ExigeRuleset() seja verdadeiro, mas isso é INOBSERVÁVEL e por isso não é exigência — NovoJob recusa RulesetID não-nil para tipo que não exige (job.go:58-59), então para TipoAnalisar o RulesetID é sempre nil e até uma query incondicional viraria WHERE id IS NULL, sem linha e sem lock, com resultado idêntico. Nem o harness de A9 discrimina. Deriva de I5.) (I4) A leitura do perfil usa SELECT ... FOR SHARE na linha de rulesets, dentro da MESMA transação, e passa o resultado a job.Tipo.ValidarRulesetParaNovoJob: linha ausente vira nil (ausente), presente vira ponteiro para o valor de ativo. (I5) job.RulesetID nil com tipo que exige ruleset NÃO pode desreferenciar: passa nil ao domínio e recebe o mesmo erro, sem query e sem panic — InserirOuObter é porta pública e recebe entity.Job arbitrária de qualquer chamador futuro, não só do serviço que passa por NovoJob. (I6) Erro de validação do gate aborta por rollback, sem deixar linha em jobs. (I7) Erro do driver na leitura do perfil usa envolverPostgres e NUNCA vira *ErroValidacao: nil só pode significar ausente confirmado, isto é, pgx.ErrNoRows. Uma implementação que mapeie qualquer erro da query para 'perfil inativo' passaria A6, A7 e até A9, e mascararia infraestrutura como culpa do cliente. (I9) A transação declara SET LOCAL lock_timeout: o gate acrescenta um SEGUNDO ponto de espera por lock numa transação que já trava documentos, e o pool tem só 10 conexões por padrão (config.go:77, POSTGRES_MAX_CONEXOES), sem statement_timeout, sem lock_timeout e sem prazo por requisição — cada chamada presa retém uma das 10 indefinidamente. O valor deve ser folgado em relação ao deadline de A9, para que o teste morra por contexto e não por lock_timeout. ATENÇÃO: I9 NÃO é provado por critério — provar exigiria esperar mais que o próprio lock_timeout, isto é, um teste lento; fica como mitigação declarada e não verificada. (I8) O nível de isolamento continua o padrão READ COMMITTED, de que a releitura idempotente depende (job.go:136-143). POR QUE NÃO 'inserir e validar depois': NÃO é por SAVEPOINT — essa justificativa anterior estava ERRADA, porque o resultado do caminho reprovado é terminal e nenhum SAVEPOINT seria preciso. O motivo real e decisivo é de LOCK: a checagem de FK do INSERT toma automaticamente FOR KEY SHARE na linha de rulesets, e FOR KEY SHARE NÃO conflita com o UPDATE de ativo, que é non-key update e pega FOR NO KEY UPDATE — então validar depois do INSERT nunca obteria o lock necessário. Motivos secundários: não acoplar mensagem de domínio a nome de constraint (SQLSTATE 23503), e não deixar transação abortada como estado intermediário para edições futuras. Fato de apoio, já provado pela suíte: ON CONFLICT DO NOTHING não dispara a checagem de FK (postgres_integration_test.go:639-648 insere ruleset inexistente numa chave ocupada sem violação). FOR SHARE e não FOR KEY SHARE pelo mesmo motivo acima; isso é fundamento de desenho e precisa ser COMPROVADO por A9, não aceito por leitura. FIXTURE: o pacote de integração NÃO tem helper de ruleset — só criarUsuario:138, inserirDocumento:150, inserirJobFixtureSQL:161 e inserirJobFixtureComStatusSQL:697. A6, A7, A8 e A9 precisam de linha em rulesets com slug, versao, nome, definicao e checksum, todos NOT NULL (migration linhas 17-28). O TESTADOR cria esse helper por INSERT direto, não por Semear, que valida e abre transação própria."
+    },
+    {
+      "id": "C3",
+      "descricao": "Correção do comentário da porta em backend/internal/domain/job/repository/criacao.go. (a) O comentário afirma 'Payload diferente gera conflito', mas o adaptador DEVOLVE o job existente e quem decide o conflito é criacao/servico.go:68 — a divisão é intencional e documentada por postgres_integration_test.go:622, logo o COMENTÁRIO é o defeito e deve descrever a divisão real. (b) Documentar o gate: job NOVO cujo tipo exige ruleset exige perfil existente e ativo, com erro de validação em ruleset_id indistinguível entre ausente e inativo; repetição de chave devolve o job existente INDEPENDENTE do estado atual do perfil. (c) Dizer EXPLICITAMENTE que o gate é de CRIAÇÃO e NÃO retira perfil de circulação: job pendente criado antes da desativação continua executável, Job.Reenfileirar (entity/job.go:165) o devolve para pendente e Reivindicar (job.go:200) não consulta rulesets. Sem essa frase, aprovar este recorte pode ser lido como 'o operador já consegue retirar um perfil', que é FALSO. A assinatura de InserirOuObter não muda e a regra de conflito NÃO se move."
+    },
+    {
+      "id": "C4",
+      "descricao": "Correção do comentário em backend/internal/domain/ruleset/repository/ruleset.go:23-24, que afirma 'O gate pertence à CRIAÇÃO do job, e recebe o flag aqui sem precisar de segunda query'. Este recorte torna isso FALSO: o gate faz uma segunda query, em data/postgres/job.go, e NÃO consome ConsultaRulesetRepo. A escolha é correta — o gate precisa da MESMA transação e do FOR SHARE, e ObterPorID materializaria até 64 KiB de definicao para ler um booleano — mas o comentário precisa registrar isso, senão o mesmo commit que corrige uma falsidade de comentário (C3) cria outra."
+    }
+  ],
+  "criterios": [
+    {
+      "id": "A1",
+      "contrato": "C1",
+      "cenario": "TipoAnalisar e TipoRenderizarPreview, com ativo = nil, ponteiro para true e ponteiro para false",
+      "esperado": "nil nas seis chamadas: tipo que não exige ruleset ignora o parâmetro. Falha se a implementação olhar o parâmetro antes de ExigeRuleset",
+      "verificacao": "V1"
+    },
+    {
+      "id": "A2",
+      "contrato": "C1",
+      "cenario": "TipoFormatar com ponteiro para true",
+      "esperado": "nil. Controle indispensável: sem ele, um `return erro` incondicional passaria A3",
+      "verificacao": "V1"
+    },
+    {
+      "id": "A3",
+      "contrato": "C1",
+      "cenario": "TipoFormatar com ativo = nil (ausente) e com ponteiro para false (inativo)",
+      "esperado": "*errors.ErroValidacao nos dois, campo ruleset_id, e o VALOR INTEIRO do erro idêntico entre os casos — compara Mensagem do envelope E o slice Campos, não só uma das duas, senão uma implementação com NovoErroValidacaoCampos(\"perfil inativo\", ...) passaria e reabriria a distinção no descricao da resposta. Cada termo determina o resultado isoladamente: remover `ativo == nil` faz o caso ausente voltar nil, remover `!*ativo` faz o inativo voltar nil (regra 12)",
+      "verificacao": "V1"
+    },
+    {
+      "id": "A4",
+      "contrato": "C1",
+      "cenario": "TipoJob inválido (string arbitrária, por exemplo \"formatar_x\") com ativo = nil",
+      "esperado": "nil: tipo inválido não exige ruleset por ExigeRuleset, e quem recusa tipo inválido é NovoJob (job.go:52). Fixa que C1 não valida tipo, evitando duas portas com mensagens concorrentes no mesmo campo",
+      "verificacao": "V1"
+    },
+    {
+      "id": "A5",
+      "contrato": "C1",
+      "cenario": "Erro do gate atravessando criacao.Servico.Criar com repositório fake que o devolve, em backend/internal/domain/job/criacao/servico_test.go",
+      "esperado": "errors.Como identifica *errors.ErroValidacao com campo ruleset_id DEPOIS de normalizarErro (servico.go:80-86), provando que o gate chega ao cliente como 400 e não como 500. Hoje isso só é sabido por leitura de que errors.Envolver preserva Unwrap — e esta spec proíbe aceitar fundamento por leitura em outro ponto",
+      "verificacao": "V1"
+    },
+    {
+      "id": "A6",
+      "contrato": "C2",
+      "cenario": "INTEGRAÇÃO: criar job TipoFormatar, chave nova, com ruleset semeado e ativo",
+      "esperado": "job criado, erro nil, linha presente em jobs com o ruleset_id informado",
+      "verificacao": "V3"
+    },
+    {
+      "id": "A7",
+      "contrato": "C2",
+      "cenario": "INTEGRAÇÃO: criar job TipoFormatar, chave nova, em dois casos — ruleset com ativo=false por SQL direto, e ruleset_id que não existe na tabela (UUIDs diferentes entre os casos)",
+      "esperado": "*errors.ErroValidacao em ruleset_id nos dois, com o VALOR do erro idêntico entre os casos — o que prova também que o UUID recebido não é interpolado, já que os ids diferem — e NENHUMA linha inserida em jobs, contagem antes e depois igual. Este critério prova classificação e ausência de linha; NÃO prova a ordem em relação ao INSERT, porque inserir e mapear SQLSTATE 23503 também devolveria ErroValidacao. Quem prova ordem e lock é A9",
+      "verificacao": "V3"
+    },
+    {
+      "id": "A8",
+      "contrato": "C2",
+      "cenario": "INTEGRAÇÃO, a razão de I1 existir: criar job TipoFormatar com ruleset ativo, desativar o ruleset por SQL direto, e repetir InserirOuObter com a MESMA chave e o mesmo payload",
+      "esperado": "a repetição devolve o job existente com erro nil, NÃO erro de validação. Falha se o gate for aplicado antes de a repetição ser resolvida, e é o que protege a repetição terminal que a porta promete",
+      "verificacao": "V3"
+    },
+    {
+      "id": "A9",
+      "contrato": "C2",
+      "cenario": "INTEGRAÇÃO, prova determinística do MODO de lock, com a direção invertida para não precisar de seam dentro de InserirOuObter (seam seria código de teste em produção, e var de pacote é proibida pela regra 4): conexão X abre transação e executa UPDATE rulesets SET ativo=false WHERE id=$1 SEM commitar; então chamar InserirOuObter para TipoFormatar naquele ruleset, com ctx cujo deadline limita a CHAMADA INTEIRA (Begin + FOR SHARE do documento + gate), da ordem de 100-200 ms e FOLGADAMENTE menor que o lock_timeout de I9, para que o contexto vença de forma determinística",
+      "esperado": "a chamada BLOQUEIA e o erro satisfaz errors.E(err, context.DeadlineExceeded) e NÃO é *errors.ErroValidacao — a segunda metade é o que impede uma implementação de mapear qualquer falha da query do perfil para 'perfil inativo', que mascararia infraestrutura como culpa do cliente (I7). Nenhuma linha em jobs. Determinístico sem sleep e sem pg_locks: o controle de não-bloqueio é A6, que passa no caminho feliz. Discrimina as três variantes: FOR SHARE conflita com o FOR NO KEY UPDATE do UPDATE pendente; FOR KEY SHARE NÃO conflita e passaria; sem lock também passaria. Uma asserção só, de modo de lock: a verificação de que, commitada a desativação, chamada nova devolve ErroValidacao é A7 e não se repete aqui",
+      "verificacao": "V3"
+    },
+    {
+      "id": "A10",
+      "contrato": "C2",
+      "cenario": "INTEGRAÇÃO, IDOR que o caminho de repetição cria e que nenhum teste existente cobre: terceiro, com documento de OUTRO dono e chave JÁ OCUPADA nesse documento, e um segundo caso com a MESMA forma pelo outro ramo da cláusula de autorização: dono de SESSÃO revogada sobre chave já ocupada",
+      "esperado": "*errors.ErroNaoEncontrado e a resposta não contém campo algum do job existente. O teste preexistente TestInserirOuObterDocumentoDeTerceiro (postgres_integration_test.go:551-578) usa chave NOVA, logo prova a reautorização do documento e NUNCA o caminho de repetição. Caminho concreto do dano: um refator plausível ('não travar o documento se o job já existe') que resolva a repetição antes de reautorizar passaria a devolver id, status, tentativas e resultado de job alheio a quem conheça dois UUIDs",
+      "verificacao": "V3"
+    },
+    {
+      "id": "A11",
+      "contrato": "C2",
+      "cenario": "INTEGRAÇÃO: job TipoAnalisar com chave nova, num banco cuja tabela rulesets está VAZIA",
+      "esperado": "criado normalmente. Prova que o gate não alcança tipo que não exige ruleset. NÃO afirma que o SELECT de rulesets deixou de ser executado: se a implementação o rodasse incondicionalmente, ErrNoRows viraria ausente e C1 devolveria nil para TipoAnalisar, e o caso passaria igual — provar o skip exigiria instrumentação cujo custo não se paga",
+      "verificacao": "V3"
+    },
+    {
+      "id": "A12",
+      "contrato": "C2",
+      "cenario": "INTEGRAÇÃO: o pacote de integração inteiro, incluindo TestInserirOuObterPayloadDivergenteDevolveJobExistente:622, TestInserirOuObterMesmaChaveDocumentosDiferentes:323 e TestInserirOuObterDocumentoDeTerceiro:551",
+      "esperado": "todos seguem passando: o gate não altera repetição, conflito de payload, reautorização de dono nem escopo por documento. É declaração de escopo da V3, que roda o pacote inteiro, não teste novo",
+      "verificacao": "V3"
+    },
+    {
+      "id": "A13",
+      "contrato": "C2",
+      "cenario": "INTEGRAÇÃO: InserirOuObter recebendo entity.Job com Tipo TipoFormatar e RulesetID nil, montado por literal sem passar por NovoJob",
+      "esperado": "*errors.ErroValidacao em ruleset_id, igual ao de A7, sem panic. InserirOuObter é porta pública e recebe entity.Job arbitrária; uma implementação com *job.RulesetID direto entraria em nil deref e viraria 500. NÃO afirma nada sobre a query ao catálogo: isso é inobservável pelo mesmo motivo registrado em I3",
+      "verificacao": "V3"
+    },
+    {
+      "id": "A14",
+      "contrato": "C3",
+      "cenario": "Leitura dos comentários corrigidos contra o comportamento real, nas duas portas",
+      "esperado": "em job/repository/criacao.go: descreve que o adaptador devolve o job existente e que o conflito de payload é decidido em criacao/servico.go:68; documenta o gate com a indistinguibilidade; e diz explicitamente que o gate é de CRIAÇÃO e não retira perfil de circulação. Não é observável em teste; verificado na revisão do delta",
+      "verificacao": "V2"
+    },
+    {
+      "id": "A15",
+      "contrato": "C4",
+      "cenario": "Leitura do comentário de domain/ruleset/repository/ruleset.go:23-24 depois do recorte",
+      "esperado": "não afirma mais que o gate recebe o flag 'sem precisar de segunda query', e registra que o gate usa query própria na mesma transação porque precisa do FOR SHARE e não quer materializar a definicao inteira para ler um booleano. Verificado na revisão do delta",
+      "verificacao": "V2"
+    }
+  ],
+  "verificacoes": [
+    {
+      "id": "V1",
+      "comando": "go test ./internal/domain/job/... -race -count=1",
+      "diretorio": "backend",
+      "responsavel": "testador",
+      "estado": "passou",
+      "evidencia": "GREEN em 08/10/2026: go test ./internal/domain/job/... -race -count=1 exit 0 (entity, criacao, consulta, execucao). RED anterior era de compilacao. A3 compara o valor INTEIRO do erro por reflect.DeepEqual; a implementacao usa UM unico errors.NovoErroValidacao(\"ruleset_id\", \"perfil de formatacao indisponivel\") para ausente e inativo, logo o valor e trivialmente identico."
+    },
+    {
+      "id": "V2",
+      "comando": "go build ./... && go vet ./... && go vet -tags=integration ./... && gofmt -l . && golangci-lint run ./... && go test ./... -race -count=1",
+      "diretorio": "backend",
+      "responsavel": "principal",
+      "estado": "passou",
+      "evidencia": "Fechamento 08/10/2026 19:51, dir backend: go build ./... && go vet ./... && go vet -tags=integration ./... && gofmt -l . PASS sem saida; golangci-lint run ./... 0 issues; go test ./... -race -count=1 exit 0, 34 pacotes, nenhum FAIL/panic/DATA RACE. ACHADO DE GATE preexistente: golangci-lint --build-tags integration ./internal/data/postgres/... acusa 2 issues em arquivos preexistentes (f2_http_integration_test.go:57 noctx; postgres_integration_test.go:855 staticcheck QF1002); o gate roda golangci-lint SEM a tag."
+    },
+    {
+      "id": "V3",
+      "comando": "env DOCKER_HOST=unix:///run/user/1000/podman/podman.sock MIGRACOES_REDE_CONTAINER=slirp4netns TESTCONTAINERS_RYUK_DISABLED=true go test ./internal/data/postgres -tags integration -race -count=1",
+      "diretorio": "backend",
+      "responsavel": "principal",
+      "estado": "passou",
+      "evidencia": "GREEN de INTEGRACAO EXECUTADO E REPRODUZIDO PELO PRINCIPAL em 08/10/2026 com Podman 5.7.0: -race -count=1 exit 0, 19.265s, todos os testes do gate PASS, inclusive TestInserirOuObterGateDePerfilUsaForShare em 0.23s, coerente com o deadline de 200 ms disparando — a prova do MODO DE LOCK executou de fato. Preexistentes :264/:323/:551/:622 verdes (A12). DEFEITO ENCONTRADO E CORRIGIDO NO FECHAMENTO: A11 era DEPENDENTE DE ORDEM. A pre-condicao global SELECT count(*) FROM rulesets == 0 passava so porque go test roda arquivos em ordem alfabetica (postgres_ antes de ruleset_), e ruleset_integration_test.go semeia em 19 pontos SEM nenhum cleanup (grep = 0). Provado por execucao: -shuffle=on derrubou o teste (seed 1791499507274547732). Corrigido tornando o teste hermetico — cortada a contagem global, mantida a parte observavel — e renomeado para TestInserirOuObterAnalisarSemRuleset, porque o nome antigo anunciava pre-condicao inexistente. Reverificado pelo principal: shuffle com a SEED QUE FALHAVA agora ok 16.443s, e shuffle aleatorio ok 15.487s. A forca anti-mutacao de A11 e a mesma: aplicar o gate a TipoAnalisar faria o RulesetID nil cair na guarda de ausente e a criacao falharia."
+    }
+  ],
+  "pendencias": []
+}

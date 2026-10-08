@@ -47,6 +47,12 @@ services:
       CONVERSOR_URL: http://libreoffice:2004
       OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
       OTEL_SERVICE_NAME: formatador-worker
+      JEV_HABILITADO: ${JEV_HABILITADO:-false}
+      TYPESAFE_API_KEY: ${TYPESAFE_API_KEY:-}
+      JEV_MODELO: ${JEV_MODELO:-jev-latest}
+      JEV_LIMITE_CONSULTA: ${JEV_LIMITE_CONSULTA:-0.7}
+      JEV_LIMITE_CONFIRMACAO: ${JEV_LIMITE_CONFIRMACAO:-0.7}
+      JEV_LIMITE_AUTOMATICO: ${JEV_LIMITE_AUTOMATICO:-0.95}
     depends_on:
       postgres:
         condition: service_healthy

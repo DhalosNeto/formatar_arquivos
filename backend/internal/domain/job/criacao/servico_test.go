@@ -299,3 +299,53 @@ func TestCriarPreservaRepeticaoTerminalENovaChave(t *testing.T) {
 		})
 	}
 }
+
+// TestCriarPropagaGateDeRulesetComoValidacao cobre A5: o erro que o gate de
+// perfil produz dentro do adaptador (C1, aplicado em InserirOuObter) tem de
+// chegar ao cliente como *errors.ErroValidacao no campo ruleset_id DEPOIS de
+// passar por normalizarErro (servico.go:80-86) — isto é, 400 e não 500.
+// Hoje isso só se sabe por leitura de que errors.Envolver preserva Unwrap, e
+// a spec deste recorte proíbe aceitar fundamento por leitura em outro ponto.
+// O erro esperado é produzido pelo PRÓPRIO contrato C1, não por um literal
+// escrito à mão: um teste com erro de mentira provaria só o encanamento, não
+// que o valor do gate sobrevive à normalização.
+func TestCriarPropagaGateDeRulesetComoValidacao(t *testing.T) {
+	ctx := context.Background()
+
+	dono, err := vo.NovoDonoSessao(uuid.New())
+	require.NoError(t, err)
+	idDocumento := uuid.New()
+	idRuleset := uuid.New()
+
+	erroDoGate := entity.TipoFormatar.ValidarRulesetParaNovoJob(nil)
+	var gate *errors.ErroValidacao
+	require.ErrorAsf(t, erroDoGate, &gate, "pré-condição: C1 devolve *errors.ErroValidacao, veio %T", erroDoGate)
+
+	documentos, err := documentoservice.NovoServico(&documentosFake{
+		t: t,
+		obter: func(context.Context, vo.Dono, uuid.UUID) (documentoentity.Documento, error) {
+			return documentoentity.Documento{ID: idDocumento, Dono: dono}, nil
+		},
+	}, 0)
+	require.NoError(t, err)
+
+	servico, err := NovoServico(jobsFake(func(context.Context, vo.Dono, entity.Job, uuid.UUID) (entity.Job, error) {
+		return entity.Job{}, erroDoGate
+	}), documentos)
+	require.NoError(t, err)
+
+	obtido, err := servico.Criar(ctx, dono, DadosNovoJob{
+		DocumentoID: idDocumento, Tipo: entity.TipoFormatar, RulesetID: &idRuleset, ChaveIdempotencia: uuid.New(),
+	})
+	require.Error(t, err)
+	assert.Equal(t, entity.Job{}, obtido)
+
+	var invalido *errors.ErroValidacao
+	require.ErrorAsf(t, err, &invalido, "gate do perfil tem de virar 400, veio %T: %v", err, err)
+	assert.Equal(t, *gate, *invalido, "normalizarErro não pode alterar o valor do erro do gate")
+	require.Len(t, invalido.Campos, 1)
+	assert.Equal(t, "ruleset_id", invalido.Campos[0].Campo)
+
+	var ausente *errors.ErroNaoEncontrado
+	assert.False(t, errors.Como(err, &ausente), "gate de perfil não é 404: perfil inativo é entrada inválida, não recurso alheio")
+}

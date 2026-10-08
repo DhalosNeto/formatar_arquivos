@@ -18,6 +18,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/daniel-halos/formatador/internal/domain/cdm"
 	documentoentity "github.com/daniel-halos/formatador/internal/domain/documento/entity"
 	"github.com/daniel-halos/formatador/internal/domain/documento/processamento"
 	"github.com/daniel-halos/formatador/internal/domain/documento/repository"
@@ -224,6 +225,37 @@ func TestExecutarAnalisarNaoMarcaFalhaSemErroDeExtracao(t *testing.T) {
 			}
 		})
 	}
+}
+
+type classificadorExecutorFake struct{ chamadas int }
+
+func (f *classificadorExecutorFake) Classificar(_ context.Context, blocos []cdm.Bloco) ([]cdm.JulgamentoEstrutura, error) {
+	f.chamadas++
+	respostas := make([]cdm.JulgamentoEstrutura, 0, len(blocos))
+	for _, bloco := range blocos {
+		respostas = append(respostas, cdm.JulgamentoEstrutura{RefXML: bloco.RefXML, Papel: cdm.Titulo, Confianca: .99})
+	}
+	return respostas, nil
+}
+
+func TestExecutarAnalisarPersisteIndiceComFallback(t *testing.T) {
+	t.Parallel()
+	doc := documentoDeTesteExecutor(t, documentoentity.StatusRecebido)
+	repo := novoRepoInternoFakeExecutor(doc)
+	servico, err := processamento.NovoServicoInterno(repo)
+	require.NoError(t, err)
+	classificador := &classificadorExecutorFake{}
+	fallback, err := cdm.NovoFallback(classificador, cdm.PoliticaConfianca{LimiteConsulta: .9, LimiteConfirmacao: .8, LimiteAutomatico: .95})
+	require.NoError(t, err)
+	executor, err := NovoExecutorDocumento(servico, &armazenadorExecutorFake{conteudo: montarDocxMinimoExecutor(t, "texto ordinário")}, &conversorExecutorFake{}, log.Novo("debug", io.Discard), fallback)
+	require.NoError(t, err)
+	_, err = executor.Executar(context.Background(), entity.Job{DocumentoID: doc.ID, Tipo: entity.TipoAnalisar})
+	require.NoError(t, err)
+	require.Equal(t, 1, classificador.chamadas)
+	indice, err := cdm.Desserializar(repo.documentos[doc.ID].CDM)
+	require.NoError(t, err)
+	require.NotEmpty(t, indice.Blocos)
+	require.Equal(t, cdm.OrigemLLM, indice.Blocos[0].Origem)
 }
 
 func TestExecutarPreviewFalhoNaoMarcaFalhaDoDocumento(t *testing.T) {

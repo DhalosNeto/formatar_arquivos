@@ -217,7 +217,23 @@ provavelmente precisa corrigir**; vale destacar na interface.
 ⚠️ **`lista_autores` não é identificado automaticamente hoje.** Nenhuma evidência textual
 confiável separa um nome de autor de um parágrafo comum, então autores e
 afiliações vêm como `paragrafo` com confiança baixa. É trabalho da correção
-manual ou da camada de LLM (F5).
+manual ou do fallback Jev experimental, se habilitado no worker.
+
+Com `JEV_HABILITADO=true`, a resposta pode conter `revisoes` (omitido sem
+pendências). Cada item identifica um bloco existente:
+
+```json
+{"ref_xml": 7, "papel_sugerido": {"nome": "secao", "nivel": 2},
+ "confianca": 0.82, "acao": "confirmar"}
+```
+
+`acao` é `confirmar` ou `revisar`. `papel_sugerido` é opcional e usa
+objeto com `nome` e `nivel` opcional, enquanto o bloco mantém o papel efetivo.
+Falha no classificador inclui `motivo: "classificador_indisponivel"`.
+Use o PATCH existente para confirmar ou escolher outro papel: ele remove
+a revisão desse bloco. Confiança baixa/sem correspondência e candidatos além
+do orçamento também geram revisão, sem alterar a classificação determinística.
+O backend oferece esses dados; a tela de confirmação ainda não foi implementada.
 
 **409** se o documento ainda não foi analisado — confira o `status` antes.
 **404** se não existe ou é de outro dono.

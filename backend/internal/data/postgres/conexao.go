@@ -64,6 +64,11 @@ func (g *Gerenciador) Documentos() contracts.DocumentoRepo { return NovoReposito
 // Rulesets devolve o repositório de perfis de formatação.
 func (g *Gerenciador) Rulesets() contracts.RulesetRepo { return NovoRepositorioRuleset(g.pool) }
 
+// RulesetsConsulta devolve o repositório de leitura de perfis por ID.
+func (g *Gerenciador) RulesetsConsulta() contracts.ConsultaRulesetRepo {
+	return NovoRepositorioRuleset(g.pool)
+}
+
 // Estruturas devolve a porta pública de correção de estrutura por dono.
 func (g *Gerenciador) Estruturas() contracts.EstruturaRepo { return NovoRepositorioDocumento(g.pool) }
 
@@ -103,9 +108,15 @@ func (g *Gerenciador) Verificar(ctx context.Context) error {
 	return envolverPostgres(g.pool.Ping(ctx), "verificar conexão")
 }
 
-// envolverPostgres encapsula o erro vindo do driver sem repassar nenhum
-// detalhe de query nem o Detail de um *pgconn.PgError, que pode carregar
-// valores de coluna.
+// envolverPostgres ENCADEIA o erro do driver: errors.Envolver guarda o
+// original e ErroEnvolvido.Error() o interpola com %v. Em pgx v5.11.0
+// *pgconn.PgError.Error() não emite o Detail nem o SQL, mas ConnectError e
+// perDialConnectError emitem usuário, banco, endereço e hostname — e
+// rotasutil.go:22 grava a mensagem em log nível Error.
+//
+// Portanto este helper NÃO serve a caminho algum que não possa vazar
+// conexão: quem precisa cortar a cadeia segue o idioma de erroSeed
+// (ruleset.go), que devolve *ErroAplicacao sem encadear a causa.
 func envolverPostgres(err error, operacao string) error {
 	return errors.Envolver(err, operacao)
 }

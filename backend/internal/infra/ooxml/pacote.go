@@ -1,17 +1,14 @@
 // Package ooxml abre e salva pacotes DOCX preservando os bytes originais das
 // partes que não são mutadas. Ver docs/adr/0001-docx-in-place.md.
 //
-// Nesta fase (F2), nenhuma parte é desserializada: Abrir só confere a forma
-// mínima de um DOCX válido e Salvar recopia cada entrada crua do ZIP via
-// zip.Writer.Copy, sem descomprimir nem reescrever XML. A desserialização
-// entra quando a mutação de um nó exigir, não antes — parsear sem necessidade
-// só cria superfície para o encoding/xml reescrever namespace e corromper o
-// pacote.
+// A substituição trabalha com bytes opacos para não reserializar XML nem
+// alterar namespaces das partes do documento.
 package ooxml
 
 import (
 	"archive/zip"
 	"io"
+	"time"
 
 	"github.com/daniel-halos/formatador/internal/infra/errors"
 )
@@ -22,11 +19,12 @@ const (
 	parteDocumentoPrincipal = "word/document.xml"
 )
 
-// Documento é um pacote DOCX aberto, pronto para ser salvo. Guarda as
-// entradas do ZIP de origem na ordem em que apareceram, para que Salvar as
-// recopie sem reordenar nem recomprimir.
+// Documento mantém a ordem das entradas e os bytes das partes intactas.
+// Não admite uso concorrente. O ReaderAt original deve permanecer disponível
+// e imutável até terminar o uso do documento, inclusive novas tentativas de salvar.
 type Documento struct {
-	arquivos []*zip.File
+	arquivos           []*zip.File
+	partesSubstituidas map[string][]byte
 }
 
 // leitorRastreado envolve um io.ReaderAt e lembra o último erro de I/O
@@ -92,26 +90,39 @@ func conferirPartesObrigatorias(arquivos []*zip.File) error {
 	return errors.NovoErroValidacao("arquivo", "o arquivo não é um pacote DOCX válido: faltam partes obrigatórias")
 }
 
-// Salvar grava o pacote no destino informado. Nenhuma parte é mutada nesta
-// fase: cada entrada é recopiada crua com zip.Writer.Copy (stdlib, desde Go
-// 1.17), que preserva cabeçalho, método de compressão e bytes comprimidos tal
-// como vieram — é isso que reproduz o ZIP de origem byte a byte.
-//
-// ponytail: Copy não descomprime nada, então o limite de zip bomb não se
-// aplica a este caminho (quem grava já validou com vo.ConferirPacoteDocx no
-// upload). O teto entra quando uma mutação futura precisar descomprimir uma
-// parte de verdade.
-func (d *Documento) Salvar(w io.Writer) error {
-	escritor := zip.NewWriter(w)
+// Salvar preserva as entradas intactas e regrava as substituídas sem consumir
+// as alterações. Em falha, o destino pode ficar parcial e deve ser descartado.
+// O writer recebido não é fechado; o documento permite nova tentativa.
+func (documento *Documento) Salvar(destino io.Writer) error {
+	escritor := zip.NewWriter(destino)
 
-	for _, arquivo := range d.arquivos {
-		if err := escritor.Copy(arquivo); err != nil {
-			return errors.NovoErroAplicacao("gravar pacote docx: " + err.Error())
+	for _, arquivo := range documento.arquivos {
+		if err := documento.gravarParte(escritor, arquivo); err != nil {
+			return errors.NovoErroAplicacao("não foi possível gravar pacote docx")
 		}
 	}
 
 	if err := escritor.Close(); err != nil {
-		return errors.NovoErroAplicacao("finalizar pacote docx: " + err.Error())
+		return errors.NovoErroAplicacao("não foi possível finalizar pacote docx")
 	}
 	return nil
+}
+
+func (documento *Documento) gravarParte(escritor *zip.Writer, arquivo *zip.File) error {
+	conteudo, substituida := documento.partesSubstituidas[arquivo.Name]
+	if !substituida {
+		return escritor.Copy(arquivo)
+	}
+	cabecalho := arquivo.FileHeader
+	cabecalho.Extra = copiarExtraSemZIP64(arquivo.Extra)
+	// CreateHeader acrescentaria outro timestamp se Modified permanecesse preenchido.
+	cabecalho.Modified = time.Time{}
+	cabecalho.CRC32 = 0
+	cabecalho.CompressedSize64, cabecalho.UncompressedSize64 = 0, 0
+	destino, err := escritor.CreateHeader(&cabecalho)
+	if err != nil {
+		return err
+	}
+	_, err = destino.Write(conteudo)
+	return err
 }

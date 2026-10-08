@@ -14,6 +14,7 @@ import (
 // lado enxerga exatamente o mesmo tipo do outro lado.
 type (
 	RulesetRepo          = rulesetrepo.RulesetRepo
+	ConsultaRulesetRepo  = rulesetrepo.ConsultaRulesetRepo
 	DocumentoRepo        = documentorepo.DocumentoRepo
 	EstruturaRepo        = documentorepo.EstruturaRepo
 	DocumentoInternoRepo = documentorepo.DocumentoInternoRepo
@@ -29,6 +30,7 @@ type (
 // rulesets ficam internas aos adaptadores.
 type GerenciadorDados interface {
 	Rulesets() RulesetRepo
+	RulesetsConsulta() ConsultaRulesetRepo
 	Documentos() DocumentoRepo
 	Estruturas() EstruturaRepo
 	DocumentosInternos() DocumentoInternoRepo
