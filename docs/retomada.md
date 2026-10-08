@@ -2,9 +2,21 @@
 
 Atualizado em 08/10/2026. Recorte `f3-gate-ruleset-inativo` **concluído**:
 4 contratos, 15 critérios, V1/V2/V3 todos `passou`, integração EXECUTADA.
-A árvore contém alterações de várias sessões e arquivos não rastreados;
-preservar tudo. Nada commitado. A spec ativa também é não rastreada: não
-assumir que versões anteriores sejam recuperáveis pelo Git.
+
+**COMMITADO.** Branch `f3-motor-e-gate-de-ruleset`, commit `f090cc2`, 96
+arquivos, a partir de `main` em `5d106fb`. A árvore está LIMPA — as instruções
+anteriores de "preservar árvore suja" não valem mais. Nada foi enviado; não há
+push nem PR. A `docs/spec-ativa.json` passou a ser rastreada neste commit, então
+de agora em diante suas versões anteriores SÃO recuperáveis pelo Git.
+
+Um commit só, por decisão do usuário: não era possível separar por recorte
+porque `domain/ruleset/repository/ruleset.go` contém a interface do recorte
+anterior e a correção de comentário deste, e dividir exigiria `git add -p`
+interativo. Excluir arquivos como `cdm/fallback.go` quebraria a compilação. O
+fallback Jev entrou junto por isso — segue experimental e desligado por padrão.
+
+Estado commitado reverificado: `go build`, `go vet`, `gofmt -l .` PASS e
+`go test ./... -race -count=1` exit 0.
 
 ## O que ficou pronto
 
