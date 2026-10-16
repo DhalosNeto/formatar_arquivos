@@ -124,6 +124,15 @@ retira perfil de circulação** — takedown é débito do executor.
 - ✅ resolvido: `ModuleNotFoundError: No module named 'uno'` vinha de pip e apt em interpretadores diferentes. `debian:trixie-slim` + `--break-system-packages` no `python3` do sistema
 
 ## MOD: fila-worker ✅
+
+**Formatação ponta a ponta (11/10):** `infra/fila/executor.go` tem o branch
+`entity.TipoFormatar` — `formatar`, `recusarPreCondicoesDeFormatacao`,
+`aplicarFormatacao`. Carrega o perfil por `ConsultaRulesetRepo.ObterPorID`
+(porta obrigatória na posição 4 do construtor), recusa perfil inativo SEM
+transitar o documento, monta o plano com o CDM devolvido por
+`IniciarFormatacao` (não o lido antes), aplica por `ooxml.AplicarPlano` e grava
+em `vo.NovaChaveFormatado(documentoID, rulesetID)`. `baixarOriginal` tem teto
+por `io.LimitReader`, compartilhado pelos três chamadores.
 **keywords:** River, fila, queue, worker, enfileirar, render_preview, consumo, analisar, retry, marcarFalha
 
 - **Sem River** — ver `docs/adr/0002-fila-sem-river.md`. A fila é a própria tabela `jobs`.

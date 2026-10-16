@@ -16,6 +16,12 @@ import (
 //
 // ReferenciasCorpo carrega RefXML, a posição ordinal do bloco entre os filhos
 // diretos de w:body — metadado estrutural, nunca texto do usuário.
+// Corpo é copiado POR VALOR, mas cinco de seus campos são PONTEIRO — Fonte,
+// Alinhamento, RecuoCM, EspacoAntesPT e EspacoDepoisPT, em que nil significa
+// "a norma é silente, preserve o documento". Logo o Plano ALIASA a Definicao
+// de onde veio. Esses cinco são SOMENTE LEITURA: nenhum consumidor pode
+// desreferenciar para escrever, senão altera o ruleset lido do banco por baixo
+// de quem o compartilhe. Quem acrescentar campo opcional herda a regra.
 type Plano struct {
 	Pagina           ruleset.Pagina
 	Corpo            ruleset.Corpo

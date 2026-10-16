@@ -84,7 +84,351 @@ também PASS. O RED original foi por símbolos ausentes. A validação focal,
 os gates globais acima e a integração posterior pertencem a
 `f3-leitura-ruleset-por-id`; não são evidências do próximo gate de criação.
 
-### Planejamento de 08/10 — gate de ruleset inativo na criação de job (em execução)
+## Medição de 15/10 — campos silentes e o primeiro perfil normativo (entregue)
+
+O `ruleset` passou a saber dizer **"a norma é silente aqui, preserve o
+documento"**, e com isso existe o primeiro perfil normativo real do projeto:
+`backend/rulesets/abnt-14724/v1.yaml`.
+
+Cinco campos de `Corpo` viraram ponteiro — `Fonte`, `Alinhamento`, `RecuoCM`,
+`EspacoAntesPT`, `EspacoDepoisPT` —, com `omitempty` em json **e** yaml. `nil`
+significa que a norma não define, e `AplicarPlano` pula o mutador
+correspondente. `AplicarTipografia` recebe `*string`: com `nil` grava só `w:sz`
+e `w:szCs`, preservando o `w:rFonts` do documento.
+
+**Ponteiro e não vazio porque `0` é valor legítimo** nos três numéricos
+("zerar o espaço"), então `0` não serve de sentinela — e ponteiro-para-zero
+mantém a chave no JSON (`"recuo_cm":0`), enquanto `nil` a omite. É o que torna
+os dois estados distinguíveis.
+
+### O perfil, e o que ele NÃO cobre
+
+Cada valor é rastreável a uma seção da ABNT NBR 14724:2024, cujo PDF o usuário
+forneceu: A4 21 × 29,7 cm e margens 3/2/3/2 do anverso em **§5.1**, corpo 12 em
+**§5.1**, entrelinha 1,5 em **§5.2**.
+
+As cinco chaves silentes estão **ausentes** do arquivo, com o motivo em
+comentário. A norma **não define** família de fonte (nenhuma menção a Times New
+Roman nem a Arial em todo o texto normativo), recuo de primeira linha (a palavra
+"recuo" não aparece), alinhamento do texto corrido, nem espaço antes/depois.
+O 1,25 cm de recuo e o "Times New Roman 12" que circulam são convenção de
+mercado e de regimento institucional, **não** requisito da norma.
+
+Fora do perfil, e dito no próprio arquivo: numeração de página (§5.3, exige
+mutar cabeçalho), filete de 5 cm e fonte menor da nota (§5.2.1), exceções de
+espaçamento simples da §5.2, e as NBR 10520 e 6023, a que a 14724 remete.
+
+**Procedência imprecisa e declarada:** `fonte` aponta para
+`https://www.abntcatalogo.com.br/`, a página inicial do catálogo, porque a URL
+permanente do registro individual não foi confirmada — o catálogo é pago e atrás
+de busca. O identificador citável vai em `nome`, e `registro_verificado: false`
+fica como comentário, porque `additionalProperties: false` recusaria a chave.
+Nada no carregamento resolve essa URL (`carregarBloqueado`), então ela é rastro
+para humano, não dependência.
+
+**Evidência em 15/10/2026 21:52, dir `backend`:** build, vet,
+`vet -tags=integration` e `gofmt -l .` PASS; `golangci-lint run ./...` 0 issues;
+`go test ./... -race -count=1` exit 0 com 34 pacotes; integração com Podman ok
+em `data/postgres` (18.375s) e `infra/fila` (18.394s).
+
+### Débitos e limites deste recorte
+
+- **A guarda de `rFonts` AFROUXOU deliberadamente:** com fonte silente o nó não
+  é alvo, então `validarAlvoTipografia` não roda para ele e um `rFonts` com
+  atributo de tema ou homônimo sem namespace deixa de recusar o documento. As
+  duas revisões julgaram correto — o rPr inteiro é reemitido byte a byte, e o
+  que a guarda evitava era *conflito de mutação*, não XML hostil. XML hostil
+  segue barrado pelas guardas que não dependem de alvo, e a guarda ESTRUTURAL de
+  ordem de `CT_RPr` é anterior ao laço por alvo e não foi tocada.
+- **Rollback de binário é modo de falha FECHADO, não corrupção:** um perfil
+  semeado pelo binário novo, lido por binário antigo, cai em `Fonte == ""`,
+  `Validar()` reprova e `decodificarRuleset` devolve 500 — indisponibilidade de
+  um perfil, nunca artefato com fonte vazia. Mitigação: subir o binário ANTES de
+  semear, e não pôr perfil novo no mesmo release de um rollback plausível.
+  **O comentário de `data/postgres/ruleset.go:228-230` ficou estale**: ele diz
+  que o caso "linha nova com binário antigo" foi evitado, e este recorte o cria
+  por campo obrigatório ausente, não por campo desconhecido.
+- **Mutação que sobrevive:** `definicao.go:224-231` reporta o campo `"corpo"`
+  para `EspacoAntesPT` e `EspacoDepoisPT`, não `corpo.espaco_antes` e
+  `corpo.espaco_depois`. A1 codifica isso, então **trocar os dois campos entre si
+  não seria detectado por teste algum**. Corrigir exige mudar produção e o
+  critério que hoje passa.
+- **`TamanhoPT` é obrigatório** embora a §5.1 diga "Recomenda-se": nenhum perfil
+  consegue dizer "preserve o tamanho do documento". Teto consciente.
+- **`{"fonte":null}` explícito é indistinguível de chave ausente** depois do
+  `Unmarshal`, então uma linha escrita por SQL direto degrada para "silente" em
+  vez de ser recusada. O schema fecha a porta do seed; SQL direto já está fora
+  do modelo de ameaça.
+- **ERRO DE PROCESSO, registrado:** este recorte foi pré-auditado só pela
+  arquitetura, com a justificativa de que não havia superfície HTTP nova. A
+  revisão de segurança apontou que isso é errado — *"sem superfície HTTP nova"
+  não equivale a "sem mudança no conjunto de entradas aceitas"* —, porque o
+  recorte altera a alcançabilidade de um validador de fronteira e um contrato de
+  serialização amarrado a teste de imutabilidade. O resultado é sólido porque a
+  implementação trouxe critérios que tornaram o afrouxamento explícito e
+  falsificável, mas isso foi sorte de execução, não de recorte. **Mudança em
+  validador de fronteira ou em contrato de serialização chama segurança, mesmo
+  sem rota nova.**
+- **Escopo das aprovações:** a árvore mistura dois recortes. A revisão de
+  segurança delimitou que `fila/executor.go`, `rotas/.../controlador.go`,
+  `vo/chavestorage.go`, `webservices/formatacao.go` e `webmodel/documento.go`
+  **não** pertencem a este delta e **não** foram auditados nesta rodada; a
+  evidência de suíte global cobre os dois recortes juntos.
+
+## Planejamento de 12/10 — campos silentes do ruleset e o primeiro perfil normativo (concluído em 15/10; ver a medição abaixo)
+
+Recorte `f3-ruleset-campos-silentes`. O usuário forneceu a **ABNT NBR 14724:2024**
+em PDF e a skill `normas-abnt` foi preenchida com seção citada em cada linha.
+
+### O que a norma define, e o que ela NÃO define
+
+Define: margens do anverso **3 cm** (esquerda, superior) e **2 cm** (direita,
+inferior) em §5.1; corpo **12** em §5.1, como RECOMENDAÇÃO; entrelinha **1,5** em
+§5.2; paginação no canto superior direito a 2 cm das bordas em §5.3; filete de
+5 cm e fonte menor na nota de rodapé em §5.2.1.
+
+**Não define**, verificado por busca no documento inteiro e não por memória:
+**família de fonte** (`grep -ci "times new roman"` = 0, nenhuma menção a Arial —
+"Times New Roman 12" é convenção de mercado, não requisito), **recuo de primeira
+linha** (`grep -ci "recuo"` = 0 no PDF inteiro; o 1,25 cm que circula não vem
+desta norma), **alinhamento** do corpo, **espaço antes/depois**, e o tamanho
+exato da "fonte menor". Citações remetem à NBR 10520 (§5.5), numeração
+progressiva à NBR 6024 (§5.4).
+
+### O problema que isso expôs
+
+O `ruleset.Definicao` **só sabia impor**: todos os sete campos de `Corpo` eram
+obrigatórios e todo mutador grava sem condição. Escrever um perfil estritamente
+normativo era impossível — o schema obrigava a inventar família, recuo e
+alinhamento, exatamente o que a regra de ouro da skill proíbe. O recorte dá ao
+modelo a capacidade de dizer "a norma é silente aqui, preserve o documento", com
+os cinco campos como ponteiro e os mutadores correspondentes pulados quando nil.
+
+### O que o perfil `abnt-14724/v1` vai cobrir — e o que NÃO vai
+
+Cobre §5.1 e §5.2 no que o motor sabe aplicar: margens, tamanho do corpo e
+entrelinha. **Não cobre** numeração de página (§5.3, exige mutar cabeçalho, que
+o motor não toca), filete e fonte menor da nota de rodapé (§5.2.1), nem as
+exceções de espaçamento simples da §5.2 — citação longa, nota, referência,
+legenda —, que dependem de o CDM classificar esses papéis e de mutadores por
+papel que não existem. E não cobre NBR 10520 nem 6023, cujas tabelas na skill
+seguem vazias.
+
+**Consequência de produto a dizer em voz alta:** "formatar em ABNT" vai entregar
+margens, 12 pt e 1,5 — e nada de recuo ou justificação, porque a norma não os
+manda. É verdadeiro e pode decepcionar quem espera o conjunto que os regimentos
+institucionais acrescentam. O campo `nome` do perfil carrega o limite, porque é
+o único que chega à tela quando o catálogo existir.
+
+### Pendências e achados deste planejamento
+
+- Pre-auditoria de arquitetura e seguranca pendente. O ponto que mais precisa de ataque e C1: ponteiro em cinco campos de um struct de dominio muda assinatura em 10 pontos de construcao, todos em teste, e preciso saber se ha desenho melhor — por exemplo um tipo proprio por campo, ou um mapa de campos aplicaveis.
+
+- A 14724 remete citacoes a NBR 10520 (§5.5) e numeracao progressiva a NBR 6024 (§5.4), e as tabelas dessas duas na skill normas-abnt seguem VAZIAS. O perfil abnt-14724 deste recorte NAO cobre citacao longa, nota de rodape, numeracao de pagina nem as excecoes de espacamento simples da §5.2 — esta escrito no proprio YAML para ninguem ler o perfil como ABNT completa.
+
+- ORDEM DE DEPLOY, inerente a capacidade e nao defeito (pre-auditoria, B6): um perfil semeado pelo binario NOVO, lido por binario em ROLLBACK, cai em Corpo.Fonte == "" e Validar() falha, virando ErroAplicacao 500 em TODA leitura daquele perfil — porque decodificarRuleset deliberadamente nao usa DisallowUnknownFields para sobreviver ao caso inverso (ruleset.go:228-230). Consequencia pratica: subir o binario ANTES de semear o perfil, e nao por o perfil novo no mesmo release de um rollback plausivel.
+
+- ACHADO DE MODELAGEM, recorte proprio e a F6 vai precisar: Definicao.Fonte modela procedencia como URL unica (string, pattern ^https?://), o que pressupoe diretriz publicada na web. Norma tecnica e identificada por NUMERO E ANO, nao por endereco, e o catalogo da ABNT e pago, atras de busca, sem URL estavel por registro — o usuario tentou e nao confirmou a URL individual da 14724:2024. Para periodico a URL funciona; para norma, nao. Procedencia deveria ser estruturada: organismo, identificador, url OPCIONAL e marca de verificacao. Neste recorte o workaround e url da pagina inicial do catalogo mais identificador no campo nome mais registro_verificado=false como comentario — impreciso e declarado, nao escondido.
+
+## Planejamento de 11/10 — endpoint e download de formatação (concluído em 12/10)
+
+Recorte `f3-endpoint-e-download-de-formatacao`: `POST /v1/documentos/:id/formatar`
+e `GET /v1/documentos/:id/formatado?ruleset_id=<uuid>`. É a última peça de
+ENGENHARIA da F3. Duas rodadas de pré-auditoria com as duas revisoras; a segunda
+aprovou com correções, todas incorporadas.
+
+### Decisões de desenho que as auditorias impuseram
+
+- **Filtrar por perfil na LEITURA**, não só na escrita. Sem isso, perfil A
+  conclui, B falha, e o GET entrega o artefato de **A com 200** sem o cliente ter
+  como detectar, porque a resposta só traz url e validade. Era o espelho exato,
+  no lado da leitura, da colisão que a chave de idempotência evita na escrita.
+- **Validar pré-condição do documento ANTES de criar o job**, com a MESMA classe
+  e campo que o worker usa (`ErroValidacao` em `formato`, como
+  `executor.go:334`) — a divergência de classe já estava na minha spec. O worker
+  segue autoritativo, porque lê estado commitado; isto é defesa em profundidade.
+- **Derivar a chave** por `vo.NovaChaveFormatado`, em vez de desserializar o
+  `Resultado` do job. Apaga a classe de "parsear metadado interno na aplicação".
+- **Nenhuma porta de consulta nova.** `consulta.Servico.ListarDoDocumento` já
+  existe e o adaptador já filtra dono no WHERE; selecionar tipo, status e perfil
+  em Go é uma linha. Isso eliminou porta, SQL, três critérios e a rodada de
+  integração inteira — a spec tem só V1 e V2.
+- **Teto de CONTAGEM de jobs de formatação em aberto por dono.** Eu havia
+  recusado cravar um prazo por job sem medir duração — defensável —, mas não
+  mitigava nada; a segurança apontou que teto de contagem não exige medição
+  alguma. O prazo fica para depois de medir.
+
+### Limites que o contrato da API vai declarar
+
+- **Nenhum perfil normativo real existe**, então o DOCX sai formatado pelo perfil
+  informado e nada afirma conformidade com norma alguma.
+- **Perda permanente do par:** qualquer falha do worker tranca aquele
+  documento+perfil para sempre, porque a idempotência devolve o job terminal e
+  não há recuperação. Caminho banal: `POST /formatar` seguido de `POST /analisar`
+  pelo próprio dono, porque `analisado → analisando` é transição válida
+  (`status.go:41-42`). A recuperação exige caso de uso de reenfileiramento
+  **escopado ao dono**, porque `Reenfileirar` vive em
+  `job/execucao/servico.go:57`, serviço interno sem dono, e chamá-lo da camada
+  HTTP é o padrão que `fronteira_test.go:49` existe para impedir. **É o item de
+  cabeça do próximo recorte.**
+- **Formatação em andamento não tem cancelamento nem recuperação**, e o gate de
+  status é por DOCUMENTO: preso em `formatando`, nenhum outro perfil socorre.
+- **A URL é capacidade ao portador** por 15 minutos, sem vínculo de dono e sem
+  revogação, sobre o **pacote original byte a byte** (ADR 0001) — com
+  `docProps/core.xml`, autoria, alterações rastreadas e objetos embutidos.
+  Vazá-la é estritamente pior que vazar o preview, que é PDF achatado.
+- **A URL pode entregar bytes de outra formatação do mesmo par**, porque a chave
+  é derivada e reformatar após reanálise reescreve a mesma chave
+  (`chavestorage.go:99-103`); e é assinada mesmo se o objeto já não existir, por
+  não haver TTL e o `Resultado` ter deixado de ser consultado.
+
+### PRÉ-CONDIÇÃO DE MERGE, não de produção
+
+**Política do bucket.** A chave do artefato é derivável de dados que o cliente
+conhece (`documentoID`, `rulesetID`). Com `anonymous get` habilitado, a
+previsibilidade vira acesso direto SEM assinatura. A segurança elevou isto de
+pendência de produção a pré-condição deste recorte. Não está no código Go e eu
+não consigo verificar: exige `mc anonymous get` e a policy do bucket.
+
+## Medição de 11/10 — formatação ponta a ponta pelo worker (entregue)
+
+`Planejar`, `AplicarPlano` e `ObterPorID` deixaram de ser código inerte: o
+worker executa job `TipoFormatar` ponta a ponta. `formatar` em
+`infra/fila/executor.go` carrega o perfil, monta o plano do CDM persistido,
+aplica ao DOCX original e grava o artefato no storage, movendo o documento de
+`analisado` (ou `formatado`) para `formatado`.
+
+Peças novas: `vo.NovaChaveFormatado(documentoID, rulesetID)` com a gramática
+canônica alargada para `formatado-<rulesetID>.docx`;
+`ServicoInterno.IniciarFormatacao`/`ConcluirFormatacao`; teto de leitura em
+`baixarOriginal` com `io.LimitReader`, conserto de raiz numa função
+compartilhada pelos três chamadores; porta de perfil obrigatória no executor,
+que é o consumidor que fez `RulesetsConsulta()` deixar de ser porta sem cliente.
+
+**Evidência em 11/10/2026 19:34, dir `backend`:** build, vet,
+`vet -tags=integration` e `gofmt -l .` PASS; `golangci-lint run ./...` 0 issues;
+`go test ./... -race -count=1` exit 0 com 34 pacotes; integração com Podman ok
+em `data/postgres` (14.245s) e `infra/fila` (15.849s). **Nenhuma verificação
+deste recorte ficou bloqueada.** Cobertura de statements: `domain/formatador`
+100%, `domain/vo` 98,7%, `domain/documento/processamento` 94,1%.
+
+Três rodadas de pré-auditoria e duas revisões de delta. O que elas evitaram,
+além do que já está registrado no planejamento: um bug de concorrência em que o
+segundo worker mataria a execução viva do primeiro; chave que o próprio projeto
+não conseguiria reler; acúmulo ilimitado de artefatos; indisponibilidade em lote
+por operação de catálogo; e leitura obsoleta do CDM, achada pelas duas revisoras
+independentemente sobre o código já entregue.
+
+### Limites e débitos abertos
+
+- **Infra DEPOIS da transição do passo (4) transita o documento para `falhou`**,
+  deliberadamente — a essa altura ele já está em `formatando` e deixá-lo lá seria
+  pior. Agravante: sair de `falhou` exige REANÁLISE, porque
+  `recusarPreCondicoesDeFormatacao` só aceita `analisado`/`formatado`, embora a
+  entidade permita `falhou → formatando` (`entity/status.go:48`). Uma
+  indisponibilidade de storage num lote manda N documentos para `falhou` e o
+  usuário precisa reanalisar. Separar erro de meio de erro atribuível ao
+  documento vale para `analisar` também: recorte próprio.
+- **`MargensComplementares{}` MATERIALIZA zero** quando `pgMar` ou o `sectPr`
+  inteiro está ausente (`ooxml/pagina_xml.go:631,770`): o DOCX sai com cabeçalho
+  e rodapé na borda, onde Word e LibreOffice usam ~708-720 twips. Valor mantido
+  porque `CT_PageMar` exige os atributos — a ausência já é não conformidade — e
+  porque inventar medida seria publicar norma sem fonte.
+- **A18 cobre a fonte do PLANO, não de tudo:** `aplicarFormatacao` também usa
+  `documento.ChaveStorage` e `documento.ID`. Hoje imutáveis após a criação, logo
+  sem cenário observável; um futuro re-upload que regrave `ChaveStorage`
+  ressuscita o defeito por caminho que A18 não pega.
+- **Classificação do perfil inativo** é `ErroConflito` hoje. 409 insinua "tente
+  de novo", o que é falso para perfil fora de circulação; `ErroProibido`/422 é
+  mais honesto. Decidir no recorte do endpoint, onde o erro passa a ser visível
+  por HTTP — hoje `laco.go:100-107` trata todo erro igual.
+- **Job em `executando` sem lease nem reclaim** segue aberto e é o BLOQUEANTE do
+  recorte do endpoint: se o worker morrer entre `Salvar` e `ConcluirFormatacao`,
+  o documento fica preso em `formatando`.
+- **`ooxml.Abrir` concatena o erro do storage na mensagem** (`pacote.go:60`), e o
+  texto do cliente de objeto costuma citar a chave, que contém o UUID do
+  documento. Contido hoje porque nada no caminho loga `err.Error()`; vira
+  exposição no dia em que um handler o propagar.
+
+## Planejamento de 08/10 — formatação ponta a ponta pelo worker (histórico; entregue em 11/10, ver a medição acima)
+
+Recorte `f3-formatacao-ponta-a-ponta-worker`: é o que transforma `Planejar`,
+`AplicarPlano` e `ObterPorID` — hoje sem chamador algum — em fluxo real.
+Branch `TipoFormatar` no executor, que hoje cai em "tipo de job não suportado".
+Endpoint HTTP, download e perfil normativo real ficam FORA, declarados.
+
+Pré-auditoria em TRÊS rodadas de arquitetura e segurança, com severidade
+decrescente: 1ª rodada 4 ALTO, 2ª rodada 1 ALTO, 3ª aprovação com duas
+sugestões. O que as rodadas evitaram:
+
+- **Colisão de chave.** A chave do artefato é por `rulesetID`, não por
+  documento nem por job. `transicoesValidas` permite `formatado → formatando`
+  porque (`status.go:31-33`) "o usuário pode trocar de ruleset e reprocessar o
+  mesmo documento": chave só por documento faria o perfil Y sobrescrever os
+  bytes de X com o `Resultado` de X ainda afirmando o slug antigo. Chave por
+  job resolveria igual, mas criaria acúmulo ilimitado de artefatos — a chave de
+  idempotência vem do cliente, então chave nova seria job novo e objeto novo,
+  sem lifecycle nem quota. Por ruleset, o espaço é limitado ao número de perfis
+  distintos.
+- **Gramática canônica.** `segueGramaticaCanonica` tinha enum fechado de nomes,
+  então `ParaChaveStorage` rejeitaria a chave do próprio artefato, que
+  `data/postgres/documento.go:222` usa para reler. A forma nova é prefixo
+  literal + UUID canônico NÃO NULO + extensão fixa, e o critério exige recusar
+  os near-misses, inclusive a chave-sentinela de `uuid.Nil` — a assimetria
+  construtor/parser já custou um achado neste VO.
+- **Disputa entre workers.** Falha do PRÓPRIO `IniciarFormatacao` não transita
+  e não chama `marcarFalha`, seguindo o precedente já documentado em
+  `executor.go:110-112`. Aqui é pior que na análise: `formatando → falhou` É
+  válido, então o segundo worker mataria a execução viva do primeiro, cujo
+  `ConcluirFormatacao` falharia depois, deixando o documento em `falhou` com o
+  artefato salvo.
+- **Indisponibilidade em lote.** O critério de takedown exige que o documento
+  permaneça EXATAMENTE em `analisado` e ZERO transições, por contador. A versão
+  frouxa permitiria uma implementação que transita e cai em `marcarFalha`,
+  mandando para `falhou` todo documento com job pendente quando um operador
+  retira um perfil.
+- **Valor normativo inventado.** `MargensComplementares` é o zero, porque
+  `ruleset.Pagina` não tem cabeçalho/rodapé/medianiz e `AplicarPagina` só os usa
+  quando o atributo ainda não existe. Inventar medida seria publicar norma sem
+  fonte.
+
+### Débitos e limites registrados por este recorte
+
+- **BLOQUEANTE do recorte do endpoint:** job em `executando` não tem lease nem
+  reclaim. Se o worker morrer entre `Salvar` e `ConcluirFormatacao`, o documento
+  fica em `formatando` e o job em `executando`; `formatando` só sai por
+  `formatado` ou `falhou`, ambos dependentes do worker, e a reivindicação
+  (`data/postgres/job.go:285`) não recupera job `executando` velho. Documento
+  travado sem caminho de usuário. Idêntico ao que já existe para `analisando`.
+- **Obrigações herdadas pelo recorte do endpoint de download:** (a) checar dono
+  ANTES de assinar URL e bucket sem leitura pública — a chave derivável só é
+  segura porque `storage/s3.go:136-141` assina exclusivamente GET e não existe
+  `PresignPutObject`; (b) `Reenfileirar` anula o `resultado` do job
+  (`domain/job/entity/job.go:171`), então durante um retry o endpoint verá
+  documento `formatado` com chave AUSENTE; (c) `jobs_por_documento` (migration
+  linha 72) resolve descobrir o último job de formatação.
+- **Limitação residual da chave por ruleset:** os bytes dependem também do CDM,
+  e `formatado → analisando` é válido. Formatar com o perfil X, reanalisar e
+  formatar de novo com X reescreve a MESMA chave com bytes diferentes, e o
+  `Resultado` do job antigo aponta para bytes mais novos sob o mesmo slug.
+  Chavear por hash do CDM resolveria e é desproporcional.
+- **Bloqueio de cabeça de fila:** `laco.go:62` processa UM job por vez e
+  `laco.go:95` usa `context.WithoutCancel`. Um documento grande trava o único
+  consumidor para todos os donos, e nem o desligamento interrompe. O custo é
+  latência alheia, não memória.
+- **Artefato órfão tolerado:** se `ConcluirFormatacao` falhar depois do `Salvar`,
+  ou se o job for retentado, o objeto fica no bucket sem linha apontando para
+  ele. Com chave por ruleset o espaço é limitado ao número de perfis.
+- **Acoplamento do teto de leitura:** o teto de `baixarOriginal` é o DEFAULT do
+  domínio (`TamanhoMaximoPadraoBytes`) e `NovoServico` aceita limite próprio. Se
+  a ingestão for configurada maior, o worker passa a recusar objeto VÁLIDO e
+  derruba `analisar` e `renderizarPreview` também — é o preço de consertar na
+  raiz, numa função compartilhada por três chamadores. Injetar o teto no
+  executor é a correção completa.
+- **`DefinirPreviewPDF` e a coluna `chave_storage_pdf`** seguem sem chamador de
+  produção. Decidir no recorte do endpoint: consumir ou deletar.
+
+## Planejamento de 08/10 — gate de ruleset inativo na criação de job (concluído)
 
 Recorte `f3-gate-ruleset-inativo`: `TipoJob.ValidarRulesetParaNovoJob(ativo *bool)`
 em `domain/job/entity/tipo.go` (regra pura; `nil` = ausente CONFIRMADO, nunca
@@ -162,8 +506,14 @@ que toque testes de integração.
 
 ### Débitos e limites registrados por este recorte
 
-- **BLOQUEANTE do recorte do executor — o gate é de CRIAÇÃO e NÃO retira perfil
-  de circulação.** Job pendente criado antes da desativação continua
+- **BAIXADO em 11/10 pelo recorte `f3-formatacao-ponta-a-ponta-worker`:** o
+  executor agora RECUSA job cujo perfil está inativo no momento da
+  reivindicação, sem transitar o documento (critério A5, com contador de
+  transições a zero). O comentário da porta de consulta foi corrigido: a porta
+  não filtra e devolve o flag; a decisão é do caso de uso. O texto abaixo fica
+  como registro histórico de quando o débito foi aberto.
+- **(HISTÓRICO, já baixado) O gate de CRIAÇÃO não retirava perfil de
+  circulação.** Job pendente criado antes da desativação continua
   executável; `Job.Reenfileirar` (`entity/job.go:165`) o devolve para pendente;
   `Reivindicar` (`job.go:200`) não consulta `rulesets`. O lugar do limite de
   takedown é o EXECUTOR, e a porta necessária já existe e já devolve o flag:
@@ -734,7 +1084,7 @@ e os limites da comparação otimista estão nas pendências abaixo.
 | **F0** Fundação | esqueleto hexagonal, infra, compose, CI | ✅ concluída |
 | **F1** Ingestão e preview | upload, storage, conversão síncrona, listagem | ✅ funcional fechada; sem prontidão de produção |
 | **F2** Parser e CDM | `ooxml.Abrir`/`Salvar`, CDM, heurística | ✅ escopo funcional entregue; suíte global e integração Postgres verdes; delta PATCH/GET auditado |
-| **F3** Motor de formatação | ruleset, mutadores OOXML, ABNT 14724 | 🟡 unidades, schema, loader e seed implementados; perfil normativo, motor e endpoints pendentes |
+| **F3** Motor de formatação | ruleset, mutadores OOXML, ABNT 14724 | 🟢 **engenharia COMPLETA em 15/10**: mutadores, plano, leitura de perfil, gate de inativo, formatação ponta a ponta pelo worker, endpoint `POST /formatar` e `GET /formatado`, campos silentes no ruleset e o primeiro perfil normativo real (`rulesets/abnt-14724/v1.yaml`), com integração executada. O perfil cobre §5.1 e §5.2 no que o motor aplica; paginação (§5.3), nota de rodapé (§5.2.1), exceções de espaço simples da §5.2 e as NBR 10520/6023 seguem fora |
 | **F4** Citações e referências | parser, ABNT 6023/10520, APA 7 | ⬜ não iniciada |
 | **F5** LLM fallback | cliente Anthropic, limiar, teto de custo | ⬜ não iniciada |
 | **F6** Revistas reais | tabelas/figuras, rulesets de periódicos | ⬜ não iniciada |

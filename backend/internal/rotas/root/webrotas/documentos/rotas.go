@@ -18,5 +18,7 @@ func Roteador(controlador *Controlador, tamanhoMaximoUploadBytes int64) rotas.Ro
 	roteador.Adicionar(rotas.Post, CaminhoAnalise, controlador.TratarAnalise)
 	roteador.Adicionar(rotas.Get, CaminhoEstrutura, controlador.TratarEstrutura)
 	roteador.Adicionar(rotas.Patch, CaminhoEstrutura, controlador.TratarCorrecao)
+	roteador.Adicionar(rotas.Post, CaminhoFormatacao, controlador.TratarFormatacao)
+	roteador.Adicionar(rotas.Get, CaminhoFormatado, controlador.TratarFormatado)
 	return roteador
 }

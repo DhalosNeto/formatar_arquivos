@@ -51,7 +51,7 @@ func TestF2CorrecaoEConsultaJobHTTPComPostgres(t *testing.T) {
 	servicoJob, err := webservices.NovoServicoJob(consultas)
 	require.NoError(t, err)
 	servidor := echo.New()
-	rotas.AplicarEmEcho(servidor, documentos.Roteador(documentos.NovoControlador(nil, nil, aplicacao), 1<<20), "/v1")
+	rotas.AplicarEmEcho(servidor, documentos.Roteador(documentos.NovoControlador(nil, nil, aplicacao, nil), 1<<20), "/v1")
 	rotas.AplicarEmEcho(servidor, jobs.Roteador(jobs.NovoControlador(servicoJob)), "/v1")
 	chamar := func(metodo, caminho, corpo, cookie string) *httptest.ResponseRecorder {
 		requisicao := httptest.NewRequest(metodo, caminho, strings.NewReader(corpo))

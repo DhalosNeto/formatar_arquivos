@@ -42,14 +42,31 @@ type Margens struct {
 }
 
 // Corpo é a tipografia do texto corrido.
+//
+// Cinco campos são PONTEIRO porque a norma pode ser silente neles: nil
+// significa "a norma não diz, preserve o que o documento já tem", e o mutador
+// correspondente é pulado. Ponteiro e não valor vazio porque, nos três
+// numéricos, 0 é valor legítimo ("zerar o espaço") e não serve de sentinela.
+//
+// TamanhoPT e Entrelinha seguem por valor e obrigatórios: a ABNT NBR
+// 14724:2024 os define (§5.1 e §5.2).
+//
+// `omitempty` nos cinco é CONTRATO, não estilo: prepararRulesets faz
+// json.Marshal + sha256 e inserirRuleset compara definicao=$4::jsonb para
+// impor imutabilidade. {"fonte":null} é jsonb DIFERENTE de chave ausente, e
+// um re-seed da mesma versão bateria em conflito contra uma versão imutável.
+//
+// ALIASING: formatador.Plano carrega um Corpo POR VALOR, então estes cinco
+// ponteiros aliasam a Definicao lida do banco. São SOMENTE LEITURA — nenhum
+// mutador desreferencia para escrever.
 type Corpo struct {
-	Fonte          string  `json:"fonte" yaml:"fonte"`
-	TamanhoPT      float64 `json:"tamanho_pt" yaml:"tamanho_pt"`
-	Entrelinha     float64 `json:"entrelinha" yaml:"entrelinha"`
-	RecuoCM        float64 `json:"recuo_cm" yaml:"recuo_cm"`
-	EspacoAntesPT  float64 `json:"espaco_antes_pt" yaml:"espaco_antes_pt"`
-	EspacoDepoisPT float64 `json:"espaco_depois_pt" yaml:"espaco_depois_pt"`
-	Alinhamento    string  `json:"alinhamento" yaml:"alinhamento"`
+	Fonte          *string  `json:"fonte,omitempty" yaml:"fonte,omitempty"`
+	TamanhoPT      float64  `json:"tamanho_pt" yaml:"tamanho_pt"`
+	Entrelinha     float64  `json:"entrelinha" yaml:"entrelinha"`
+	RecuoCM        *float64 `json:"recuo_cm,omitempty" yaml:"recuo_cm,omitempty"`
+	EspacoAntesPT  *float64 `json:"espaco_antes_pt,omitempty" yaml:"espaco_antes_pt,omitempty"`
+	EspacoDepoisPT *float64 `json:"espaco_depois_pt,omitempty" yaml:"espaco_depois_pt,omitempty"`
+	Alinhamento    *string  `json:"alinhamento,omitempty" yaml:"alinhamento,omitempty"`
 }
 
 // Validar confere o perfil inteiro antes de qualquer uso.
@@ -180,33 +197,35 @@ func ValidarTamanhoCorpoPT(tamanho float64) error {
 	return nil
 }
 
+// validar aceita nil em cada um dos cinco campos silentes e valida o valor
+// somente quando o campo está presente.
 func (corpo Corpo) validar() error {
-	if err := ValidarFonteCorpo(corpo.Fonte); err != nil {
-		return err
+	if corpo.Fonte != nil {
+		if err := ValidarFonteCorpo(*corpo.Fonte); err != nil {
+			return err
+		}
 	}
 	if err := ValidarTamanhoCorpoPT(corpo.TamanhoPT); err != nil {
 		return err
 	}
-	if err := ValidarAlinhamento(corpo.Alinhamento); err != nil {
-		return err
+	if corpo.Alinhamento != nil {
+		if err := ValidarAlinhamento(*corpo.Alinhamento); err != nil {
+			return err
+		}
 	}
 	if err := ValidarEntrelinha(corpo.Entrelinha); err != nil {
 		return err
 	}
-	if err := ValidarRecuoCM(corpo.RecuoCM); err != nil {
-		return err
+	if corpo.RecuoCM != nil {
+		if err := ValidarRecuoCM(*corpo.RecuoCM); err != nil {
+			return err
+		}
 	}
-	medidas := []struct {
-		valor     float64
-		converter func(float64) (int, error)
-		positivo  bool
-	}{
-		{corpo.EspacoAntesPT, vo.PontosParaTwips, false},
-		{corpo.EspacoDepoisPT, vo.PontosParaTwips, false},
-	}
-	for _, medida := range medidas {
-		convertido, err := medida.converter(medida.valor)
-		if err != nil || (medida.positivo && convertido <= 0) {
+	for _, medida := range []*float64{corpo.EspacoAntesPT, corpo.EspacoDepoisPT} {
+		if medida == nil {
+			continue
+		}
+		if _, err := vo.PontosParaTwips(*medida); err != nil {
 			return invalido("corpo")
 		}
 	}

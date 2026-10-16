@@ -18,9 +18,10 @@ type RulesetRepo interface {
 // Porta separada de RulesetRepo porque ler catálogo e semear catálogo são casos
 // de uso distintos: quem semeia (cmd/rulesetctl) não lê, e quem lê não semeia.
 //
-// O segundo retorno é o flag ATIVO da linha, DEVOLVIDO e não aplicado: a
-// leitura por ID não filtra por ativo, para que um job já existente continue
-// executável depois de a versão sair de circulação.
+// O segundo retorno é o flag ATIVO da linha, DEVOLVIDO e não aplicado: a porta
+// não filtra por ativo porque a DECISÃO é do caso de uso, não da leitura. A
+// decisão do executor de formatação é RECUSAR o job cujo perfil saiu de
+// circulação — job já existente NÃO continua executável.
 //
 // O gate pertence à CRIAÇÃO do job e NÃO consome esta porta: ele faz query
 // própria (data/postgres/job.go), porque precisa ler `ativo` com FOR SHARE

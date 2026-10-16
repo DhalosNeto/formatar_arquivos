@@ -25,3 +25,11 @@ type PreviewResposta struct {
 	URL      string    `json:"url"`
 	ExpiraEm time.Time `json:"expira_em"`
 }
+
+// FormatadoResposta é a URL pré-assinada de download do DOCX formatado, com a
+// validade da assinatura. Mesma forma de PreviewResposta: não carrega chave de
+// storage, slug, versão nem id de job.
+type FormatadoResposta struct {
+	URL      string    `json:"url"`
+	ExpiraEm time.Time `json:"expira_em"`
+}
