@@ -34,6 +34,11 @@ type BlocoBruto struct {
 	EstiloNomeado string
 	Texto         string
 	Indice        int
+	// RecuoEsquerdaTwips é o recuo à esquerda que o PRÓPRIO parágrafo declara
+	// em w:pPr/w:ind, em twips. Zero quando não há recuo declarado e também
+	// quando o valor não é um inteiro não negativo de twips — ver
+	// recuoEsquerdaTwips.
+	RecuoEsquerdaTwips int
 }
 
 // ExtrairBlocos lê word/document.xml e devolve os blocos de nível superior na
@@ -134,6 +139,7 @@ func lerBloco(decodificador *xml.Decoder, tipo TipoBlocoBruto, indice int) (Bloc
 
 	var texto strings.Builder
 	var dentroDeTexto bool
+	var recuoLido bool
 	profundidade := 1
 
 	for profundidade > 0 {
@@ -144,12 +150,30 @@ func lerBloco(decodificador *xml.Decoder, tipo TipoBlocoBruto, indice int) (Bloc
 
 		switch elemento := token.(type) {
 		case xml.StartElement:
+			// w:pPrChange guarda as propriedades ANTIGAS de uma revisão
+			// rastreada: o w:ind que vive lá dentro é o recuo REVOGADO, e
+			// lê-lo devolveria a propriedade que a revisão já derrubou. A
+			// subárvore inteira é descartada antes de contar profundidade —
+			// ela nunca contém w:t, então nada de texto se perde.
+			if ehElementoW(elemento.Name, "pPrChange") {
+				if err := decodificador.Skip(); err != nil {
+					return BlocoBruto{}, erroDocumentoMalformado()
+				}
+				continue
+			}
 			profundidade++
 			switch {
 			case ehElementoW(elemento.Name, "t"):
 				dentroDeTexto = true
 			case tipo == TipoBlocoBrutoParagrafo && bloco.EstiloNomeado == "" && ehElementoW(elemento.Name, "pStyle"):
 				bloco.EstiloNomeado = atributoW(elemento, "val")
+			// A guarda de tipo é a mesma de w:pStyle, e pelo mesmo motivo: um
+			// w:ind de parágrafo dentro de célula contaminaria o BlocoBruto do
+			// w:tbl que o contém. O primeiro w:ind vence, como o primeiro
+			// w:pStyle.
+			case tipo == TipoBlocoBrutoParagrafo && !recuoLido && ehElementoW(elemento.Name, "ind"):
+				recuoLido = true
+				bloco.RecuoEsquerdaTwips = recuoEsquerdaTwips(elemento)
 			}
 		case xml.EndElement:
 			profundidade--
@@ -165,6 +189,37 @@ func lerBloco(decodificador *xml.Decoder, tipo TipoBlocoBruto, indice int) (Bloc
 
 	bloco.Texto = texto.String()
 	return bloco, nil
+}
+
+// recuoEsquerdaTwips lê o recuo à esquerda de um w:ind.
+//
+// w:start tem precedência sobre w:left: medindo a conversão de um .fodt por
+// `soffice --headless`, o LibreOffice emite <w:ind w:start="2268"/> — ler só
+// w:left devolveria zero no produtor alvo. Essa precedência vale enquanto o
+// w:start for um inteiro: se ele não parseia (ausente, "4cm", 20 dígitos), a
+// leitura cai para w:left, porque descartar o único valor utilizável do
+// elemento devolveria 0 para um recuo que o documento declarou. w:start que
+// parseia mas é negativo continua vencendo, e o saneamento abaixo o zera.
+//
+// w:leftChars NÃO é lido: a unidade dele é centésimo de caractere, e
+// interpretá-lo como twip daria um número sem sentido; parágrafo que só o
+// tenha fica com 0, limite declarado.
+//
+// Saneamento: ST_SignedTwipsMeasure admite negativo e medida universal
+// ("4cm"), e o valor vem de arquivo não confiável. Qualquer coisa que não
+// seja inteiro não negativo — texto, unidade, overflow de strconv — vira 0.
+// Nunca erro, nunca pânico: valor estranho é limite do formato, não falha do
+// pacote. O saneamento é para baixo de propósito: devolver um número grande
+// para entrada hostil classificaria como citação um bloco que não é.
+func recuoEsquerdaTwips(elemento xml.StartElement) int {
+	twips, err := strconv.Atoi(atributoW(elemento, "start"))
+	if err != nil {
+		twips, err = strconv.Atoi(atributoW(elemento, "left"))
+	}
+	if err != nil || twips < 0 {
+		return 0
+	}
+	return twips
 }
 
 func ehElementoW(nome xml.Name, local string) bool {
@@ -217,6 +272,22 @@ const (
 	confiancaSemEstilo       = 0.2
 )
 
+// confiancaRecuoCitacao é a confiança do bloco classificado como citação só
+// pelo recuo. Valor fixo, entre confiancaSemEstilo (0,2) e
+// confiancaEstiloConhecido (0,95), e obrigatoriamente ABAIXO de
+// config.LimiteConsulta (default 0,7): o fallback só considera candidato o
+// bloco com Confianca < LimiteConsulta, e recuo é palpite geométrico que
+// precisa seguir aberto ao desempate do LLM — diferente do estilo nomeado,
+// que o documento DECLARA.
+const confiancaRecuoCitacao = 0.5
+
+// limiarRecuoCitacaoTwips é o recuo à esquerda acima do qual um parágrafo sem
+// outro papel é tratado como citação em bloco. A aritmética: 1440 twips por
+// polegada ÷ 2,54 = 566,93 twips por centímetro, logo 567 é 1 cm. O corpo dos
+// dois fixtures tem recuo 0, e o recuo de bloco usual (4 cm) fica em 2268,
+// bem acima do limiar. A comparação é ESTRITA: exatamente 567 não classifica.
+const limiarRecuoCitacaoTwips = 567
+
 const prefixoEstiloSecao = "Heading"
 
 // ClassificarPorEstiloDocx traduz um bloco bruto em entrada do CDM usando só
@@ -241,14 +312,41 @@ func papelPeloEstilo(bruto BlocoBruto) (cdm.Papel, float64) {
 		return cdm.Tabela, confiancaEstiloConhecido
 	}
 
-	switch bruto.EstiloNomeado {
+	papel, confianca := papelDoEstiloNomeado(bruto.EstiloNomeado)
+
+	// Portão DERIVADO, não lista literal de estilos: o sinal geométrico só é
+	// consultado quando o estilo não determinou outro papel — ou seja, quando
+	// o papel resultante é o default Paragrafo. Derivar evita que o portão
+	// deixe de valer em silêncio quando alguém acrescentar estilo ao switch.
+	if papel == cdm.Paragrafo && bruto.RecuoEsquerdaTwips > limiarRecuoCitacaoTwips {
+		return cdm.Citacao, confiancaRecuoCitacao
+	}
+
+	return papel, confianca
+}
+
+// papelDoEstiloNomeado traduz o styleId declarado pelo documento. Comparação
+// exata e sensível a caixa, no mesmo idioma de Title/Normal/HeadingN.
+//
+// A lista de estilos de citação é MEDIDA, não intuída: o LibreOffice descarta
+// os caracteres não-ASCII do styleId, então "Citação" sai "Citao" e "Título 1"
+// sai "Ttulo1user" — "Citacao" e "Citação" nunca chegam dele. Quote e
+// IntenseQuote são os styleIds latent-English do Word. "BlockQuote" não entra:
+// nenhuma ferramenta conhecida o emite.
+//
+// A lista é frágil por natureza, porque depende do idioma de quem salvou o
+// arquivo; o caminho robusto é o recuo (limiarRecuoCitacaoTwips).
+func papelDoEstiloNomeado(estilo string) (cdm.Papel, float64) {
+	switch estilo {
 	case "Title":
 		return cdm.Titulo, confiancaEstiloConhecido
 	case "Normal":
 		return cdm.Paragrafo, confiancaEstiloConhecido
+	case "Citao", "Blocodecitao", "Quote", "IntenseQuote":
+		return cdm.Citacao, confiancaEstiloConhecido
 	}
 
-	if nivel, ok := nivelDeSecao(bruto.EstiloNomeado); ok {
+	if nivel, ok := nivelDeSecao(estilo); ok {
 		return cdm.Secao(nivel), confiancaEstiloConhecido
 	}
 

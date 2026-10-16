@@ -75,6 +75,45 @@ func AplicarHeuristica(blocos []Bloco) ([]Bloco, error) {
 			continue
 		}
 
+		// Papel JÁ DETERMINADO não é rebaixado por palpite, nem textual
+		// (0,8) nem posicional (0,6).
+		//
+		// Paragrafo significa "nenhum papel determinado": a camada 1 o
+		// devolve tanto no fallback de estilo desconhecido quanto no estilo
+		// conhecido "Normal". Palpite só PREENCHE bloco sem papel; nunca
+		// sobrescreve papel que alguma evidência determinou. A confiança é
+		// ortogonal e de propósito não entra nesta condição — um Citacao a
+		// 0,5 é uma determinação, e quem resolve a dúvida é o fallback do
+		// Jev, que recebe o bloco justamente por ele estar abaixo do limite
+		// de consulta. Condicionar à confiança rebaixaria essa citação e
+		// nunca é exercitado por caso nenhum.
+		//
+		// Proteger o papel do bloco não desliga a DELIMITAÇÃO dos vizinhos:
+		// a região é encerrada por dois termos independentes, e o bloco de
+		// papel determinado passa pelos dois. Termo 1: o papel dele é
+		// cabeçalho — é o caso do estilo nomeado, que encerra a região sem
+		// precisar de numeração no texto ("Introdução" como Secao(1)). Termo
+		// 2: o TEXTO dele casa numeração de seção, mesmo que o papel não
+		// seja cabeçalho (um Titulo "1 INTRODUÇÃO").
+		//
+		// O limite do termo 2 é literal: fecha região quem o TEXTO aponta
+		// como cabeçalho, não quem casa qualquer regra textual. Legenda e
+		// palavras-chave aparecem DENTRO de uma região sem encerrá-la, e
+		// ehCabecalho sobre o papel textual é o que mantém essa distinção —
+		// o Papel zero devolvido quando nada casa também não é cabeçalho.
+		//
+		// Em nenhum dos dois casos o bloco é reclassificado: papel,
+		// confiança e origem saem intactos, e o texto afeta só a
+		// classificação dos vizinhos.
+		if bloco.Papel != Paragrafo {
+			papelPeloTexto, _ := papelPorRegraTextual(texto, emCaixaAlta)
+			if ehCabecalho(bloco.Papel) || ehCabecalho(papelPeloTexto) {
+				regiaoAberta = Papel{}
+			}
+			saida[i] = bloco
+			continue
+		}
+
 		// Regras 3, 4 e 5 — evidência no próprio texto do bloco, que vence a
 		// inferência por região.
 		if papel, casou := papelPorRegraTextual(texto, emCaixaAlta); casou {
@@ -88,14 +127,6 @@ func AplicarHeuristica(blocos []Bloco) ([]Bloco, error) {
 				return nil, err
 			}
 			saida[i] = novo
-			continue
-		}
-
-		// Cabeçalho que a camada 1 já reconheceu pelo estilo nomeado encerra
-		// a região sem precisar de numeração no texto.
-		if ehCabecalho(bloco.Papel) {
-			regiaoAberta = Papel{}
-			saida[i] = bloco
 			continue
 		}
 

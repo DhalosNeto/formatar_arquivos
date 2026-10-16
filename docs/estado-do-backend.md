@@ -1,10 +1,15 @@
 # Estado do backend — resumo executivo
 
-**Atualizado:** 2026-10-08 · Medições históricas preservadas abaixo
+**Atualizado:** 2026-10-16 · Medições históricas preservadas abaixo
 
-F3: seed imutável Postgres e CLI semear entregues; testes unitários com race,
-integrações reais e revisão aprovados. Motor, perfis normativos e endpoints
-ainda pendentes como fluxo completo. Página/margens, alinhamento, entrelinha,
+F3: engenharia completa. Seed imutável, motor de formatação, `POST /formatar`
+e `GET /formatado`, campos opcionais de ruleset, o primeiro perfil normativo
+rastreável (`abnt-14724/v1.yaml`) e a classificação de `cdm.Citacao` estão
+entregues, com suíte global verde sob `-race -shuffle=on`, lint limpo e revisões
+de validador e segurança aprovadas com ressalva. **Isso não é conformidade ABNT
+nem aprovação de produção:** o perfil cobre margens, corpo e entrelinha, e os
+débitos de concorrência, recuperação de job e verificação de checksum continuam
+abertos — ver Pendências abertas. Página/margens, alinhamento, entrelinha,
 recuo da primeira linha, espaçamento antes/depois e tipografia direta dos runs
 entregues como componentes;
 ponto de pausa e próxima tarefa em `docs/retomada.md`.
@@ -83,6 +88,169 @@ passou (1.053s), incluindo os seis `TestDecodificarRuleset*` e
 também PASS. O RED original foi por símbolos ausentes. A validação focal,
 os gates globais acima e a integração posterior pertencem a
 `f3-leitura-ruleset-por-id`; não são evidências do próximo gate de criação.
+
+## Medição de 16/10 — CDM classifica citação (entregue)
+
+Recorte `f3-cdm-classifica-citacao` fechado. `cdm.Citacao`, papel declarado e
+até aqui nunca atribuído, passou a ser produzido por dois caminhos na camada 1:
+estilo nomeado (`Citao`, `Blocodecitao`, `Quote`, `IntenseQuote` — lista
+**medida** no `soffice`, que descarta não-ASCII do styleId) e recuo à esquerda
+acima de 567 twips (1 cm), com confiança 0,5 para o bloco seguir candidato ao
+fallback do Jev.
+
+**Comandos, 16/10/2026, dir `backend`:**
+
+| Comando | Resultado |
+|---|---|
+| `go build ./... && go vet ./... && go vet -tags=integration ./... && gofmt -l .` | exit 0, sem saída |
+| `golangci-lint run ./...` | `0 issues.` |
+| `go test ./... -race -count=1 -shuffle=on` | nenhuma linha `FAIL`; `-shuffle` ligado de propósito, porque este projeto já teve teste que passava só pela ordem alfabética |
+| `go test ./internal/infra/ooxml ./internal/domain/cdm -race -count=1 -cover` | `ok` 96,292s cobertura 90,6% · `ok` 1,061s cobertura 94,6% — **de statements, não de condições** |
+
+Integração não foi executada: `go vet -tags=integration` compila as tags mas não
+sobe testcontainers, e o recorte não toca `data/postgres`.
+
+### O que o RED achou e as três auditorias não
+
+**Contradição interna da spec.** A7 prometia que a citação vinda de recuo
+resiste à inferência por região, mas C5 exigia também `Confianca >
+confiancaRegiao`, e a confiança do recuo é 0,5 contra `confiancaRegiao` 0,6 —
+logo o bloco **seria** rebaixado. Pior: aquele termo não tinha nenhum caso que
+falsificasse sua remoção, violando a regra 12 dentro da própria spec, depois de
+três rodadas de auditoria que procuravam exatamente isso. C5 ficou com **um
+termo**: `Papel != Paragrafo`. A formulação que se sustenta é que `Paragrafo`
+significa "nenhum papel determinado", então palpite posicional só **preenche**
+bloco sem papel, nunca sobrescreve determinação — e confiança é ortogonal a
+isso.
+
+**Asserção impossível em A1.** A cláusula "nenhum caso acima do limiar", minha,
+era falsa por construção: `w:start="2268"` e `w:left="1134"` estão acima de 567
+de propósito, e A11 **depende** disso. O `assert.Equal` por caso subsume o que a
+faixa pretendia pegar.
+
+**`w:pPrChange` guarda a propriedade revogada.** Se o único `w:ind` do parágrafo
+vive dentro dele, "o primeiro vence" devolve o recuo que a revisão já derrubou.
+Virou a terceira guarda da leitura, com `Skip()` da subárvore antes de contar
+profundidade.
+
+### C6, uma regressão que eu quase documentei em vez de consertar
+
+O validador achou que a guarda de C5, posta antes das regras textuais, desligou
+o delimitador **textual** para todo bloco de papel determinado:
+`[Paragrafo "RESUMO", Titulo "1 INTRODUÇÃO", Paragrafo "texto"]` fechava a
+região antes do recorte e passou a deixá-la aberta, porque `ehCabecalho(Titulo)`
+é falso. Ele preferia ajustar o comentário e declarar a perda; consertei o
+código, com o argumento de que **fechar região é delimitação, não
+reclassificação** — o bloco mantém papel, confiança e origem, e o texto afeta só
+a classificação dos vizinhos. Ele reauditou e deu o argumento por correto.
+
+C6 ficou com dois termos: `ehCabecalho(bloco.Papel) || ehCabecalho(papelPeloTexto)`.
+O limite do termo 2 é literal e não óbvio: fecha região quem o texto aponta como
+**cabeçalho**, não quem casa qualquer regra textual — legenda e palavras-chave
+aparecem dentro de uma região sem encerrá-la.
+
+### A lição que vale mais que o recorte: cobertura por mutação
+
+A19 foi escrito para blindar esse limite e **não blindava**. O validador mutou
+`ehCabecalho(papelPeloTexto)` para `casou` e a suíte de `cdm` inteira passou,
+A19 incluído: em A19 o bloco do meio é `Paragrafo` e por isso **nunca alcança a
+guarda**. Era blindagem inalcançável se passando por blindagem, e a frase "A19
+existe para pegar isso", escrita por mim no contrato, era afirmação sem prova.
+
+A20 (`Citacao "Tabela 1 — distribuição"` dentro da região) é o único vermelho
+sob aquele mutante, reproduzido com `go test -overlay`. Daí a distinção que
+passou a valer no registro de evidência deste projeto: **A20 tem morte de
+mutante medida; A18 e A19 não.** "Nasceu verde" e "mata mutante" não são a mesma
+afirmação, e cobertura de statements não distingue as duas.
+
+**Viés de processo, meu:** rodei testador e codador em paralelo para ganhar
+tempo, então A19 foi medido contra a árvore já consertada. Isso não distingue
+"blindagem" de "código inalcançável" — foi troca de rigor por paralelismo, e eu
+não registrei a troca na hora de fazê-la.
+
+### Limites declarados
+
+`NotaRodape` continua inalcançável: `RefXML` endereça só filhos de `w:body`, e
+nota de rodapé vive em `word/footnotes.xml` — nenhum dos dois fixtures tem essa
+parte. A heurística de aspas foi **aposentada**, não adiada: aspas marcam
+*citação*, não *extensão*, e citação longa é convencionalmente apresentada **sem**
+aspas, então o sinal perderia 100% das citações longas já formatadas. A lista de
+estilos é frágil por natureza, porque depende do idioma de quem salvou o arquivo;
+o caminho robusto é o recuo.
+
+---
+
+## Planejamento de 15/10 — CDM classifica citação (concluído em 16/10; ver a medição abaixo)
+
+Recorte `f3-cdm-classifica-citacao`: fazer o CDM atribuir `cdm.Citacao`, papel
+declarado e **nunca atribuído**, para habilitar a exceção de espaçamento simples
+da §5.2 no recorte dos mutadores por papel.
+
+**TRÊS rodadas de pré-auditoria, as duas primeiras REPROVADAS.** O que elas
+mudaram no desenho é mais interessante que o resultado:
+
+### A heurística que eu projetei foi RETIRADA, não corrigida
+
+A versão original classificava por "bloco autônomo integralmente entre aspas,
+acima de um limiar de runas". As duas auditorias mostraram que a premissa estava
+**invertida**: aspas evidenciam *citação*, não *extensão*, e a citação longa é
+convencionalmente apresentada **sem** aspas — logo o sinal erraria 100% das
+citações longas já formatadas, e pegaria epígrafe, diálogo e título de obra. O
+limiar de runas substituiria um critério normativo ausente ("mais de três
+linhas" é propriedade de renderização). O recorte passou a classificar **só onde
+há evidência**: estilo nomeado e recuo à esquerda.
+
+### Quatro medições que nenhum raciocínio daria
+
+- **`Normal` é estilo CONHECIDO** (`blocos.go:246`) com confiança 0,95, e **47
+  dos 57** parágrafos do fixture real o usam. O portão original ("sinal textual
+  só quando o estilo é vazio ou desconhecido") faria o sinal **nunca disparar**
+  no documento LibreOffice, que é o produtor alvo.
+- **O LibreOffice descarta os caracteres não-ASCII do styleId.** Reproduzi com
+  `soffice --headless`: "Citação" sai como **`Citao`** e "Título 1" como
+  **`Ttulo1user`**. Logo `Citacao` e `Citação` **nunca chegam** do LO, e a lista
+  de estilos original estava errada. A lista é intrinsecamente frágil, porque o
+  styleId depende do idioma de quem salvou.
+- **O LibreOffice emite `w:ind w:start`, não `w:left`.** Medido:
+  `<w:ind w:start="2268"/>` para 4 cm. O contrato lia só `w:left` — leria zero no
+  produtor alvo, repetindo a classe de erro do portão de `Normal`.
+- **A faixa de confiança anulava o desempate que a própria spec prometia.**
+  `fallback.go:87` exige `Confianca < LimiteConsulta`, default **0,7**
+  (`jev.go:26`); a faixa declarada (0,2 a 0,95) continha 0,8, valor que excluiria
+  o bloco inferido do fallback.
+
+### O conserto que eu propus quebrava um teste que passa hoje
+
+Para impedir que a camada 2 apagasse a classificação, propus "inferência por
+região não rebaixa bloco com confiança maior que a da região". As duas
+auditorias pegaram, independentemente, que isso **desligaria a propagação de
+região** no fixture real: `Normal` dá `Paragrafo`@0,95, e os blocos 7 e 10
+(`Resumo`) e 36 a 39 (`Referencia`) de `heuristica_integrada_test.go` são
+`Normal` — eles voltariam a `Paragrafo`, quebrando
+`TestAplicarHeuristicaFixtureRealIdentificaEstruturaDoArtigo` e tornando
+`Referencia` **indetectável**. Confirmei os seis blocos.
+
+**A causa do erro é conceitual e vale guardar:** `confiancaEstiloConhecido` em
+`Normal` é confiança de que **lemos o estilo certo**, não de que o papel está
+semanticamente determinado. `Paragrafo` é o papel-default — "sem papel" — e
+palpite posicional deve vencê-lo em qualquer confiança. A regra correta é
+`Papel != Paragrafo && Confianca > confiancaRegiao`, e ela conserta de lambuja o
+caso **preexistente** do `Titulo`, que já é sobrescrito hoje porque
+`ehCabecalho(Titulo)` é falso.
+
+### Pendências e achados deste planejamento
+
+- Reauditoria pendente nas DUAS. A heuristica de aspas mais tamanho foi RETIRADA, nao corrigida: as duas auditorias mostraram que a premissa estava invertida (aspas evidenciam citacao, nao extensao) e que o sinal erraria 100% das citacoes longas ja formatadas, que sao apresentadas sem aspas. O recorte passou a classificar so por EVIDENCIA — estilo e recuo. Quero que julguem se a retirada e a decisao certa ou se perdi alcance demais no documento totalmente desformatado.
+
+- DEBITO declarado e nomeado pela auditoria de seguranca, para o recorte dos mutadores: definir o PISO DE CONFIANCA que autoriza mutar. Se os mutadores aplicarem formatacao a um Citacao de confianca inferida sem exigir confirmacao, o parametro de deteccao vira fato normativo no documento entregue.
+
+- RISCO DE ANCORAGEM no fallback, que a seguranca derrubou da versao anterior: infra/llm/jev.go:114 envia bloco.Papel.String() no payload ao Jev, entao o prompt passara a conter 'citacao', ancorando o LLM a CONFIRMAR a classificacao que a camada 1 acabou de propor. A afirmacao anterior de que o fallback recebe Citacao 'de graca, sem mudanca' era FALSA e saiu da spec. Volume e custo nao mudam: o teto de 32 candidatos de fallback.go:95 e o mesmo.
+
+- LIMITE do styleId medido: reproduzi 'Citacao' -> `Citao` e 'Titulo 1' -> `Ttulo1user` com soffice em pt-BR, e a auditoria mediu 'Bloco de citacao' -> `Blocodecitao`. O nome do LO depende do IDIOMA de quem salvou, entao a lista de C2 cobre pt-BR e os styleIds latent-English do Word, e NAO cobre outros locales. `Quotations` (LO en-US) foi citado pela auditoria como NAO verificado e por isso NAO entrou na lista.
+
+- RISCO DE DADO, latente e a registrar (seguranca): RevisaoEstrutura e chaveada por RefXML (fallback.go:31) e validarRevisoes casa revisao com bloco do MESMO indice (serializacao.go:193). Hoje nao existe rota que aplique revisao persistida sobre CDM reanalisado — a reanalise regenera indice e revisoes juntos —, entao C5 mudar o papel de blocos preexistentes nao descasa nada. O risco aparece quando a rota de confirmacao existir.
+
+- LACUNA NA REFERENCIA DO PROJETO, achada neste recorte: a skill ooxml-referencia NAO cobre w:left versus w:start, apesar de o fixture de recuo_test.go ter os dois no mesmo w:ind e de o LibreOffice emitir w:start. Acrescentar a armadilha a skill no fechamento.
 
 ## Medição de 15/10 — campos silentes e o primeiro perfil normativo (entregue)
 
@@ -1367,7 +1535,13 @@ serviço real.**
 | — | `ListaAutores` não é identificada por nenhuma camada determinística; depende da F5 ou de correção manual. |
 | — | O **frontend está atrás da API**: não consome `POST .../analisar`, `GET/PATCH .../estrutura` nem `GET /v1/jobs/{id}`. Esperado — os endpoints são novos — mas significa que nenhum deles tem exercício por navegador. |
 | — | `internal/infra/errors` expõe `E(err, alvo)` como equivalente de `errors.Is`. São 13 usos em produção e o nome não comunica nada; renomear para `Is` é mecânico, mas é decisão de vocabulário do projeto. |
-| — | `backend/rulesets/` contém schema técnico, mas nenhum perfil normativo publicável. Bloqueia conformidade normativa; testes do backend usam perfis sintéticos identificados. |
+| — | `backend/rulesets/abnt-14724/v1.yaml` é o primeiro perfil normativo rastreável (margens, corpo e entrelinha, cada valor citando a seção da NBR 14724:2024). Cobre pouco de propósito: numeração de página, filete da nota de rodapé, exceções de espaçamento simples da §5.2, NBR 10520 e NBR 6023 ficam fora, e o próprio arquivo lista isso em comentário. `fonte` aponta para a página inicial do catálogo da ABNT, não para o registro individual — a URL permanente não foi confirmada, e o schema não tem chave para registrar isso. **Não é conformidade ABNT.** |
+| MÉDIO | `abrirDocumentoPrincipal` (`internal/infra/ooxml/blocos.go:71-83`) abre `word/document.xml` sem `io.LimitReader`: `arquivo.Open()` entrega até o tamanho declarado (teto do pacote: 250 MiB) e `lerBloco` acumula todo `w:t` num `strings.Builder` mais a fatia de blocos, dando pico de centenas de MB por job concorrente. É o `io.LimitReader` que o comentário de `internal/domain/vo/formatoarquivo.go:167-171` pede desde a F2. Achado da segurança em 16/10; **preexistente**, o recorte de citação não alterou esse perfil. Soma com os dois débitos de concorrência da F7 (sem teto de job por dono, sem deadline por job). |
+| BAIXO | Leitura de `w:ind` em `lerBloco` tem a mesma limitação que `w:pStyle` já tinha: a guarda é só `tipo == TipoBlocoBrutoParagrafo`, e "o primeiro `w:ind` vence" não distingue nível de aninhamento. Um `w:p` externo sem recuo próprio que contenha `w:txbxContent`/`mc:AlternateContent` com um parágrafo recuado herda o recuo do filho e pode sair `Citacao@0.5`. Impacto é só classificação, revisável pelo usuário e pelo fallback. Correção seria exigir o `w:ind` em profundidade 2. |
+| — | `regioes[emCaixaAlta]` é consultado em `heuristica.go:72`, **antes** de qualquer verificação de papel: um bloco de papel DETERMINADO cujo texto seja exatamente `RESUMO`/`REFERÊNCIAS` — uma `Citacao "REFERÊNCIAS"`, por exemplo — **abre** região, e nenhum critério de A7 a A20 cobre isso. Preexistente e improvável como documento, mas é o espelho exato do defeito que C6 consertou: texto decidindo delimitação em bloco que a guarda nem alcança. Achado do testador em 16/10. |
+| — | `ehCabecalho(papelPeloTexto)` quando a numeração passa de `NivelSecaoMaximo` (`nivelPelaNumeracao` devolve false, logo `Papel{}`, logo não-cabeçalho) só é exercitado hoje por bloco `Paragrafo`. Um `Titulo "1.2.3.4.5.6.7 texto"` provaria que a guarda de C6 herda esse limite; sem o caso, mutar `nivelPelaNumeracao` para aceitar nível 7 provavelmente sobrevive dentro da guarda. |
+| — | **Decisão de desenho não declarada por contrato**, achada pelo testador em 16/10: quando um bloco de papel determinado não é cabeçalho nem tem texto de seção — uma `Citacao` dentro da região de resumo, por exemplo — `regiaoAberta` **permanece aberta** e os blocos seguintes continuam virando `Resumo`. O comportamento é plausível e é o que o código faz hoje, mas nenhum critério de A7 a A19 o fixa, então um conserto futuro pode invertê-lo sem quebrar teste nenhum. |
+| BAIXO | `confiancaRecuoCitacao` (0,5, em `blocos.go`) precisa ficar abaixo de `LimiteConsulta` para a citação por recuo seguir candidata ao fallback, mas o valor vive em `internal/infra/ooxml` e o limite em `internal/infra/config/jev.go` (default 0,7), **sem nada que trave o acoplamento**: configurar `LimiteConsulta` para menos de 0,5 tira o bloco do desempate do LLM em silêncio, e nenhum teste nota. |
 
 ---
 

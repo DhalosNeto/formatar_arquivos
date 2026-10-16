@@ -26,6 +26,21 @@ garantia.
 - **Nó ausente ≠ nó vazio.** Não existe `w:pPr` num parágrafo sem formatação
   direta; criar um vazio muda o pacote sem necessidade e polui a comparação byte
   a byte. Só crie o nó quando for de fato gravar algo nele.
+- **`w:left` vs `w:start` — formas transicional e estrita.** O mesmo recuo é
+  escrito com nomes de atributo DIFERENTES: o Word emite `<w:ind w:left="..."/>`
+  (transitional) e o LibreOffice emite `<w:ind w:start="..."/>` (strict). O par
+  `w:right`/`w:end` tem o mesmo problema. **Ler só um dos dois faz metade dos
+  documentos reais parecer sem recuo** — medido neste projeto: o `soffice` gravou
+  `w:start="2268"` onde a intuição esperava `w:left`. Leia os dois, com `w:start`
+  tendo precedência quando ambos aparecem.
+- **`w:ind` tem parente falso: `w:leftChars`/`w:startChars`.** A unidade é
+  centésimo de caractere, não twip. Tratar como twip dá número 20× errado.
+- **`w:pPrChange` guarda a propriedade REVOGADA.** É o registro de uma revisão
+  rastreada: dentro dele vive um `w:pPr` com os valores ANTIGOS. Um parágrafo
+  pode ter `w:ind` **apenas** lá dentro — e aí "o primeiro `w:ind` vence"
+  devolve justamente o recuo que o autor já desfez. Pule a subárvore inteira de
+  `w:pPrChange` antes de ler qualquer propriedade. O mesmo vale para
+  `w:rPrChange` e `w:sectPrChange`.
 - **Herança de estilo.** Formatação direta em `w:pPr`/`w:rPr` vence `styles.xml`.
   Redefinir o estilo nomeado não corrige um parágrafo que tem override direto —
   os dois caminhos precisam ser tratados.

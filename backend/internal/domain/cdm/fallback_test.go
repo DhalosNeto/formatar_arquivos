@@ -156,3 +156,110 @@ func TestFallbackCancelaMesmoSeClassificadorRetornaSucesso(t *testing.T) {
 	_, err = f.Aplicar(ctx, []Bloco{{Papel: Paragrafo, Confianca: .2, Origem: OrigemHeuristica, RefXML: 1}})
 	require.ErrorIs(t, err, context.Canceled)
 }
+
+// ---------------------------------------------------------------------------
+// Recorte f3-cdm-classifica-citacao — C4, critérios A6 e A16
+//
+// C4 fixa a confiança do sinal de recuo (C3) em 0,5: ESTRITAMENTE abaixo de
+// LimiteConsulta, cujo default de produção é 0,7 (infra/config/jev.go:26), e
+// acima de confiancaSemEstilo (0,2). Valor fixo, não faixa — a faixa
+// "abaixo de 0,95" admitiria 0,8, e com 0,8 o bloco SAIRIA do conjunto de
+// candidatos (Aplicar exige Confianca < LimiteConsulta), isto é, o desempate
+// que o recorte promete poderia ser eliminado em silêncio.
+// ---------------------------------------------------------------------------
+
+// politicaDefaultDeProducao é a política que carregarJev monta sem nenhuma
+// variável de ambiente definida.
+func politicaDefaultDeProducao() PoliticaConfianca {
+	return PoliticaConfianca{LimiteConsulta: 0.7, LimiteConfirmacao: 0.7, LimiteAutomatico: 0.95}
+}
+
+// candidatosConsultados devolve os blocos que Fallback.Aplicar de fato
+// mandou para o classificador. É a única forma observável do conjunto de
+// candidatos, e é exatamente a fronteira que o TextoResumo atravessa.
+func candidatosConsultados(t *testing.T, politica PoliticaConfianca, blocos []Bloco) []Bloco {
+	t.Helper()
+
+	fake := &classificadorEstruturaFake{classificar: func(entrada []Bloco) []JulgamentoEstrutura {
+		julgamentos := make([]JulgamentoEstrutura, 0, len(entrada))
+		for _, bloco := range entrada {
+			julgamentos = append(julgamentos, JulgamentoEstrutura{RefXML: bloco.RefXML, SemCorrespondencia: true})
+		}
+		return julgamentos
+	}}
+
+	f, err := NovoFallback(fake, politica)
+	require.NoError(t, err)
+
+	_, err = f.Aplicar(context.Background(), blocos)
+	require.NoError(t, err)
+	return fake.entrada
+}
+
+// A6 — a confiança de C3 mantém o bloco candidato ao desempate; a de C2
+// (estilo nomeado, evidência declarada pelo documento) não precisa de
+// desempate e fica fora.
+func TestFallbackCitacaoPorRecuoEhCandidataECitacaoPorEstiloNao(t *testing.T) {
+	const (
+		refRecuo  = 1
+		refEstilo = 2
+	)
+
+	blocos := []Bloco{
+		{Papel: Citacao, TextoResumo: "citação detectada pelo recuo", Confianca: 0.5, Origem: OrigemEstiloDocx, RefXML: refRecuo},
+		{Papel: Citacao, TextoResumo: "citação declarada pelo estilo", Confianca: 0.95, Origem: OrigemEstiloDocx, RefXML: refEstilo},
+	}
+
+	consultados := candidatosConsultados(t, politicaDefaultDeProducao(), blocos)
+
+	require.Len(t, consultados, 1,
+		"com LimiteConsulta 0,7, a citação de recuo (0,5) entra no desempate e a de estilo (0,95) não")
+	require.Equal(t, refRecuo, consultados[0].RefXML)
+}
+
+// A16 — o delta de candidatos, medido e NOMEADO. É o efeito colateral que o
+// recorte torna visível: hoje um parágrafo com estilo "Normal" fica em 0,95 e
+// NUNCA é candidato, logo seu TextoResumo nunca atravessa a fronteira para o
+// Jev; com C3, todo "Normal" RECUADO cai para 0,5 e passa a atravessar.
+// Mitigado por Jev.Habilitado ser false por padrão, e o teto de 32 blocos de
+// Aplicar não muda — o que muda é QUAIS blocos saem.
+func TestFallbackRecuoAumentaOConjuntoDeCandidatos(t *testing.T) {
+	const (
+		candidatosSemRecuo = 0
+		candidatosComRecuo = 2
+	)
+
+	// Documento de cinco parágrafos com estilo "Normal": a camada 1 devolve
+	// Paragrafo a 0,95 em todos.
+	semRecuo := []Bloco{
+		{Papel: Paragrafo, TextoResumo: "parágrafo um", Confianca: 0.95, Origem: OrigemEstiloDocx, RefXML: 0},
+		{Papel: Paragrafo, TextoResumo: "parágrafo dois", Confianca: 0.95, Origem: OrigemEstiloDocx, RefXML: 1},
+		{Papel: Paragrafo, TextoResumo: "parágrafo três", Confianca: 0.95, Origem: OrigemEstiloDocx, RefXML: 2},
+		{Papel: Paragrafo, TextoResumo: "parágrafo quatro", Confianca: 0.95, Origem: OrigemEstiloDocx, RefXML: 3},
+		{Papel: Paragrafo, TextoResumo: "parágrafo cinco", Confianca: 0.95, Origem: OrigemEstiloDocx, RefXML: 4},
+	}
+
+	// O MESMO documento com dois desses parágrafos recuados acima do limiar.
+	comRecuo := append([]Bloco(nil), semRecuo...)
+	comRecuo[1] = Bloco{Papel: Citacao, TextoResumo: "parágrafo dois, recuado", Confianca: 0.5, Origem: OrigemEstiloDocx, RefXML: 1}
+	comRecuo[3] = Bloco{Papel: Citacao, TextoResumo: "parágrafo quatro, recuado", Confianca: 0.5, Origem: OrigemEstiloDocx, RefXML: 3}
+
+	politica := politicaDefaultDeProducao()
+
+	semRecuoConsultados := candidatosConsultados(t, politica, semRecuo)
+	require.Len(t, semRecuoConsultados, candidatosSemRecuo,
+		"sem recuo, nenhum dos cinco parágrafos atravessa a fronteira: 0,95 nunca é menor que LimiteConsulta 0,7")
+
+	consultados := candidatosConsultados(t, politica, comRecuo)
+	require.Len(t, consultados, candidatosComRecuo,
+		"com recuo, os dois blocos a 0,5 passam a atravessar a fronteira para o Jev")
+
+	refs := []int{consultados[0].RefXML, consultados[1].RefXML}
+	require.ElementsMatch(t, []int{1, 3}, refs, "são exatamente os dois blocos recuados que passam a sair")
+
+	// O delta é comparado sobre os RESULTADOS, não sobre as duas constantes:
+	// comparar candidatosComRecuo com candidatosSemRecuo seria 2 > 0, verdade
+	// aritmética que passa sem o código ser executado.
+	require.Greater(t, len(consultados), len(semRecuoConsultados),
+		"o critério é o delta MEDIDO: o documento com recuo tem de produzir mais candidatos que o mesmo documento sem recuo")
+}
