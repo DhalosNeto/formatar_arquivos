@@ -742,3 +742,66 @@ func TestPapelUnmarshalJSONNaoEcoaConteudoRecebido(t *testing.T) {
 	require.Error(t, err)
 	assert.NotContains(t, err.Error(), segredo)
 }
+
+// ---------------------------------------------------------------------------
+// Recorte f3-cdm-classifica-citacao — A12 (guarda barata de persistência)
+//
+// NÃO conta como cobertura de C2 nem de C3: a serialização é agnóstica a
+// papel (grava o nome como string) e "citacao" já está em papeisSemNivel.
+// O critério existe para que a primeira gravação de um papel que nunca foi
+// atribuído não descubra um problema em produção.
+// ---------------------------------------------------------------------------
+
+func TestCitacaoAtravessaTodasAsPortasDePersistencia(t *testing.T) {
+	t.Parallel()
+
+	for _, caso := range []struct {
+		nome      string
+		confianca float64
+	}{
+		{nome: "citação por estilo nomeado (C2)", confianca: 0.95},
+		{nome: "citação pelo sinal de recuo (C3)", confianca: 0.5},
+	} {
+		caso := caso
+		t.Run(caso.nome, func(t *testing.T) {
+			t.Parallel()
+
+			bloco, err := NovoBloco(Citacao, "Trecho citado em bloco.", caso.confianca, OrigemEstiloDocx, 4)
+			require.NoError(t, err, "NovoBloco é a primeira porta: Citacao precisa ser papel aceito pelo domínio")
+
+			indice := NovoIndice([]Bloco{bloco})
+			require.NoError(t, indice.Validar(), "Indice.Validar é a porta que o executor da fila usa antes de gravar")
+
+			saida := serializarEDesserializar(t, []Bloco{bloco})
+
+			require.Len(t, saida.Blocos, 1)
+			assert.Truef(t, bloco == saida.Blocos[0],
+				"o round-trip precisa preservar papel, confiança e origem: entrada=%+v saida=%+v", bloco, saida.Blocos[0])
+			assert.Equal(t, Citacao, saida.Blocos[0].Papel)
+			assert.Equal(t, caso.confianca, saida.Blocos[0].Confianca)
+			assert.Equal(t, OrigemEstiloDocx, saida.Blocos[0].Origem)
+		})
+	}
+}
+
+// TestCDMAntigoSemCitacaoContinuaValido é a outra metade de A12: um cdm_jsonb
+// gravado antes deste recorte não tem nenhum bloco de citação, e continua
+// legível e válido depois dele.
+func TestCDMAntigoSemCitacaoContinuaValido(t *testing.T) {
+	t.Parallel()
+
+	antigo := []byte(`{"versao":1,"blocos":[` +
+		`{"papel":{"nome":"titulo"},"texto_resumo":"Título do artigo","confianca":0.95,"origem":"estilo-docx","ref_xml":0},` +
+		`{"papel":{"nome":"secao","nivel":1},"texto_resumo":"1 INTRODUÇÃO","confianca":0.95,"origem":"estilo-docx","ref_xml":1},` +
+		`{"papel":{"nome":"paragrafo"},"texto_resumo":"Primeiro parágrafo.","confianca":0.95,"origem":"estilo-docx","ref_xml":2}` +
+		`]}`)
+
+	indice, err := Desserializar(antigo)
+
+	require.NoError(t, err)
+	require.NoError(t, indice.Validar())
+	require.Len(t, indice.Blocos, 3)
+	for i, bloco := range indice.Blocos {
+		assert.NotEqualf(t, Citacao, bloco.Papel, "bloco %d de um CDM antigo não pode virar Citacao na leitura", i)
+	}
+}

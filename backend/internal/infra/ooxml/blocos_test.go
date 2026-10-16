@@ -22,6 +22,7 @@ import (
 	"crypto/sha256"
 	"encoding/xml"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -462,4 +463,425 @@ func TestClassificarPorEstiloDocxProduzBlocoValidoParaCDM(t *testing.T) {
 		assert.NoError(t, err, "classificação da camada 1 produziu um cdm.Bloco (índice %d, estilo %q) que o domínio recusaria",
 			bruto.Indice, bruto.EstiloNomeado)
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Recorte f3-cdm-classifica-citacao — RED
+//
+// Critérios cobertos neste arquivo: A1 e A11 (C1), A2 e A3 (C2), A4, A5 e
+// A13 (C3).
+//
+// FASE VERMELHA por COMPILAÇÃO: BlocoBruto.RecuoEsquerdaTwips e
+// limiarRecuoCitacaoTwips ainda não existem.
+//
+// A confiança própria do sinal de recuo (C3/C4) é afirmada pelo VALOR, não
+// pelo nome da constante: C4 a fixa em 0,5 — abaixo de LimiteConsulta (0,7,
+// em infra/config/jev.go:26, para o bloco continuar candidato ao fallback) e
+// acima de confiancaSemEstilo (0,2). O nome do identificador em blocos.go é
+// escolha do codador; o número é contrato.
+const confiancaRecuoCitacaoEsperada = 0.5
+
+// documentoXMLComCorpo monta um word/document.xml com o conteúdo informado
+// dentro de w:body. Diferente de documentoXMLMinimo, não embrulha nada em
+// w:p: os casos de w:pPr/w:ind precisam escrever o parágrafo inteiro.
+func documentoXMLComCorpo(corpo string) []byte {
+	return []byte(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>` +
+		corpo + `</w:body></w:document>`)
+}
+
+// extrairBlocosSemPanicDe é extrairBlocosDe com a garantia explícita de que
+// nenhuma entrada deste arquivo derruba o processo: A1 exercita o vetor de
+// entrada NÃO CONFIÁVEL (negativo, medida universal, inteiro de 20 dígitos),
+// e "sem erro e sem pânico" é asserção, não esperança.
+func extrairBlocosSemPanicDe(t *testing.T, documentoXML []byte) []BlocoBruto {
+	t.Helper()
+
+	dados := docxSintetico(t, documentoXML)
+	doc, err := Abrir(bytes.NewReader(dados), int64(len(dados)))
+	require.NoError(t, err)
+	require.NotNil(t, doc)
+
+	blocos, err := abrirBlocosSemPanic(t, doc)
+	require.NoError(t, err, "valor de w:ind inválido é limite do formato, não erro do pacote: a leitura precisa seguir")
+	return blocos
+}
+
+// A1 — leitura de w:ind sobre docxSintetico, um termo por caso. Cada caso
+// prova UM termo de C1; remover qualquer pedaço da guarda quebra o caso dele
+// e só o dele.
+//
+// Cada caso é pinado pelo VALOR exato. Não existe asserção de FAIXA contra
+// limiarRecuoCitacaoTwips aqui, e não pode existir: "nenhum caso acima do
+// limiar" é falso por construção — w:start="2268" e w:left="1134" estão acima
+// de 567 de propósito, e A11 DEPENDE de 2268 estar acima para provar que o
+// recuo classifica. O saneamento frouxo que a faixa pretendia pegar
+// (negativo virando grande, overflow virando MaxInt) já quebra no
+// assert.Equal do caso, que exige o número exato, não um número diferente.
+func TestExtrairBlocosLeRecuoEsquerdaTwipsDoProprioParagrafo(t *testing.T) {
+	t.Parallel()
+
+	casos := []struct {
+		nome    string
+		corpo   string
+		indice  int
+		tipo    TipoBlocoBruto
+		esperal int
+		// esperaTexto, quando preenchido, afere o texto do bloco alvo. Só os
+		// casos em que a guarda do recuo poderia engolir texto o usam.
+		esperaTexto string
+	}{
+		{
+			nome:    "w:start é lido: é o que o LibreOffice emite para fo:margin-left",
+			corpo:   `<w:p><w:pPr><w:ind w:start="2268"/></w:pPr><w:r><w:t>recuado</w:t></w:r></w:p>`,
+			esperal: 2268,
+		},
+		{
+			nome:    "w:left é lido: é o que o Word emite",
+			corpo:   `<w:p><w:pPr><w:ind w:left="1134"/></w:pPr><w:r><w:t>recuado</w:t></w:r></w:p>`,
+			esperal: 1134,
+		},
+		{
+			nome:    "w:start tem precedência sobre w:left quando os dois estão presentes",
+			corpo:   `<w:p><w:pPr><w:ind w:left="1134" w:start="2268"/></w:pPr><w:r><w:t>recuado</w:t></w:r></w:p>`,
+			esperal: 2268,
+		},
+		{
+			// Achado BAIXO da segurança: a precedência de w:start vencia
+			// ANTES do saneamento, então um w:start com medida universal
+			// zerava o bloco e descartava o único valor utilizável do w:ind.
+			// Precedência vale sobre valor que PARSEIA; sobre lixo, não.
+			nome:    "w:start INVÁLIDO (\"4cm\") ao lado de w:left VÁLIDO cai para o w:left, não para 0",
+			corpo:   `<w:p><w:pPr><w:ind w:start="4cm" w:left="2268"/></w:pPr><w:r><w:t>recuado</w:t></w:r></w:p>`,
+			esperal: 2268,
+		},
+		{
+			// A assimetria DECLARADA, que faltava caso: negativo PARSEIA,
+			// então a precedência de w:start continua valendo e o saneamento
+			// zera depois. Não é o caso de "não descartar o único valor
+			// utilizável" — ali o w:start não parseia; aqui ele parseia e
+			// vence, mesmo sendo recuo pendente.
+			nome:    "w:start NEGATIVO ao lado de w:left válido dá 0: negativo parseia, logo a precedência vale e o saneamento zera",
+			corpo:   `<w:p><w:pPr><w:ind w:start="-567" w:left="2268"/></w:pPr><w:r><w:t>pendente</w:t></w:r></w:p>`,
+			esperal: 0,
+		},
+		{
+			nome:    "w:leftChars sozinho dá 0: a unidade é centésimo de caractere, não twip",
+			corpo:   `<w:p><w:pPr><w:ind w:leftChars="400"/></w:pPr><w:r><w:t>recuado</w:t></w:r></w:p>`,
+			esperal: 0,
+		},
+		{
+			nome:    "recuo NEGATIVO dá 0: ST_SignedTwipsMeasure aceita negativo, e recuo pendente não é citação",
+			corpo:   `<w:p><w:pPr><w:ind w:left="-567"/></w:pPr><w:r><w:t>pendente</w:t></w:r></w:p>`,
+			esperal: 0,
+		},
+		{
+			nome:    "medida universal \"4cm\" dá 0: ST_SignedTwipsMeasure também admite unidade, e o campo é em twips",
+			corpo:   `<w:p><w:pPr><w:ind w:left="4cm"/></w:pPr><w:r><w:t>recuado</w:t></w:r></w:p>`,
+			esperal: 0,
+		},
+		{
+			nome:    "inteiro de 20 dígitos dá 0 sem erro e sem pânico: overflow de strconv é entrada hostil, não falha do pacote",
+			corpo:   `<w:p><w:pPr><w:ind w:left="99999999999999999999"/></w:pPr><w:r><w:t>hostil</w:t></w:r></w:p>`,
+			esperal: 0,
+		},
+		{
+			nome:    "w:ind repetido no mesmo w:pPr: o PRIMEIRO vence, igual já vale para w:pStyle",
+			corpo:   `<w:p><w:pPr><w:ind w:left="1134"/><w:ind w:left="2268"/></w:pPr><w:r><w:t>repetido</w:t></w:r></w:p>`,
+			esperal: 1134,
+		},
+		{
+			nome: "w:ind dentro de w:pPrChange é IGNORADO: pPrChange guarda a propriedade REVOGADA por revisão rastreada",
+			// Este é o único w:ind do parágrafo, de propósito: se o caso
+			// tivesse um w:ind corrente antes, "o primeiro vence" já o
+			// resolveria e o termo do pPrChange seria vacuoso — o teste
+			// passaria sem que a guarda existisse.
+			corpo:   `<w:p><w:pPr><w:pPrChange w:id="1" w:author="revisor"><w:pPr><w:ind w:left="2268"/></w:pPr></w:pPrChange></w:pPr><w:r><w:t>recuo revogado</w:t></w:r></w:p>`,
+			esperal: 0,
+			// A guarda pula a subárvore do w:pPrChange, e o comentário de
+			// produção afirma que isso é seguro porque pPrChange não contém
+			// w:t. A afirmação precisa de asserção: sem ela, um salto que
+			// consumisse tokens além da subárvore engoliria texto do
+			// parágrafo sem quebrar nenhum caso desta tabela.
+			esperaTexto: "recuo revogado",
+		},
+		{
+			nome:    "w:ind de parágrafo DENTRO de célula não contamina o BlocoBruto do w:tbl",
+			corpo:   `<w:tbl><w:tr><w:tc><w:p><w:pPr><w:ind w:left="2268"/></w:pPr><w:r><w:t>celula</w:t></w:r></w:p></w:tc></w:tr></w:tbl>`,
+			tipo:    TipoBlocoBrutoTabela,
+			esperal: 0,
+		},
+		{
+			nome:    "w:pPr sem w:ind dá 0",
+			corpo:   `<w:p><w:pPr><w:pStyle w:val="Normal"/></w:pPr><w:r><w:t>sem recuo</w:t></w:r></w:p>`,
+			esperal: 0,
+		},
+		{
+			nome:    "parágrafo sem w:pPr dá 0",
+			corpo:   `<w:p><w:r><w:t>sem propriedades</w:t></w:r></w:p>`,
+			esperal: 0,
+		},
+	}
+
+	for _, caso := range casos {
+		caso := caso
+		t.Run(caso.nome, func(t *testing.T) {
+			t.Parallel()
+
+			blocos := extrairBlocosSemPanicDe(t, documentoXMLComCorpo(caso.corpo))
+
+			require.Len(t, blocos, 1, "pré-condição do caso: o corpo tem exatamente um bloco de nível superior")
+			require.Equal(t, caso.tipo, blocos[caso.indice].Tipo, "pré-condição do caso: o bloco alvo precisa ser do tipo que o caso pretende provar")
+
+			assert.Equal(t, caso.esperal, blocos[caso.indice].RecuoEsquerdaTwips)
+			if caso.esperaTexto != "" {
+				assert.Equal(t, caso.esperaTexto, blocos[caso.indice].Texto,
+					"a leitura do recuo não pode consumir texto do parágrafo")
+			}
+		})
+	}
+}
+
+// A2 — a lista MEDIDA de estilos de citação. Um caso por nome: remover um
+// item da lista de C2 quebra exatamente o caso dele.
+func TestClassificarPorEstiloDocxEstiloDeCitacaoViraPapelCitacao(t *testing.T) {
+	t.Parallel()
+
+	// A lista é a medida de soffice, não a intuição: o LibreOffice descarta
+	// os caracteres não-ASCII do styleId, então "Citação" sai como "Citao" e
+	// "Bloco de citação" como "Blocodecitao". Quote/IntenseQuote são os
+	// styleIds latent-English do Word.
+	for _, estilo := range []string{"Citao", "Blocodecitao", "Quote", "IntenseQuote"} {
+		estilo := estilo
+		t.Run(estilo, func(t *testing.T) {
+			t.Parallel()
+
+			bruto := BlocoBruto{Tipo: TipoBlocoBrutoParagrafo, EstiloNomeado: estilo, Texto: "Trecho citado de outra obra.", Indice: 7}
+			bloco := ClassificarPorEstiloDocx(bruto)
+
+			assert.Equal(t, cdm.Citacao, bloco.Papel)
+			assert.Equal(t, confiancaEstiloConhecido, bloco.Confianca,
+				"estilo nomeado de citação é evidência DECLARADA pelo documento: mesma confiança de Title/Normal/HeadingN")
+			assert.Equal(t, cdm.OrigemEstiloDocx, bloco.Origem)
+			assert.Equal(t, bruto.Indice, bloco.RefXML)
+		})
+	}
+}
+
+// A3 — near-misses INEQUÍVOCOS. "Citacao" e "Citação" estão aqui de
+// propósito: são o que a intuição diria, e são exatamente as formas que o
+// LibreOffice NÃO emite. O caso documenta a medição.
+func TestClassificarPorEstiloDocxNearMissDeEstiloDeCitacaoNaoViraCitacao(t *testing.T) {
+	t.Parallel()
+
+	casos := []struct {
+		nome   string
+		estilo string
+	}{
+		{nome: "Citacao sem cedilha-til: o LO descarta o não-ASCII, nunca translitera", estilo: "Citacao"},
+		{nome: "Citação acentuado: idem, não chega a sair do LO", estilo: "Citação"},
+		{nome: "Quote2 não é Quote", estilo: "Quote2"},
+		{nome: "BlocoDeCitacao não é Blocodecitao", estilo: "BlocoDeCitacao"},
+		{nome: "citao em caixa baixa: a comparação é sensível a caixa, como Title/Normal/Heading já são", estilo: "citao"},
+		{nome: "BlockQuote: nenhuma ferramenta conhecida o emite", estilo: "BlockQuote"},
+	}
+
+	for _, caso := range casos {
+		caso := caso
+		t.Run(caso.nome, func(t *testing.T) {
+			t.Parallel()
+
+			bruto := BlocoBruto{Tipo: TipoBlocoBrutoParagrafo, EstiloNomeado: caso.estilo, Texto: "Trecho qualquer.", Indice: 2}
+			bloco := ClassificarPorEstiloDocx(bruto)
+
+			assert.NotEqual(t, cdm.Citacao, bloco.Papel,
+				"estilo fora da lista medida não pode virar Citacao: sem recuo, o bloco cai em Paragrafo e a camada 2 decide")
+			assert.Equal(t, cdm.Paragrafo, bloco.Papel)
+			assert.Equal(t, confiancaSemEstilo, bloco.Confianca)
+		})
+	}
+}
+
+// A4 — o sinal de recuo dispara nos estilos que NÃO determinam outro papel.
+// O caso de "Normal" é o que importa: 47 dos 57 parágrafos de
+// artigo-real-libreoffice.docx o usam, e um portão que só aceitasse estilo
+// vazio ou desconhecido nunca dispararia no produtor alvo.
+func TestClassificarPorEstiloDocxRecuoAcimaDoLimiarViraCitacao(t *testing.T) {
+	t.Parallel()
+
+	casos := []struct {
+		nome   string
+		estilo string
+	}{
+		{nome: "estilo vazio (parágrafo sem w:pStyle)", estilo: ""},
+		{nome: "Normal: estilo CONHECIDO que devolve o papel-default Paragrafo", estilo: "Normal"},
+		{nome: "BodyText: estilo desconhecido pelo switch", estilo: "BodyText"},
+	}
+
+	for _, caso := range casos {
+		caso := caso
+		t.Run(caso.nome, func(t *testing.T) {
+			t.Parallel()
+
+			bruto := BlocoBruto{
+				Tipo:               TipoBlocoBrutoParagrafo,
+				EstiloNomeado:      caso.estilo,
+				Texto:              "Trecho longo apresentado em bloco recuado, sem aspas.",
+				RecuoEsquerdaTwips: limiarRecuoCitacaoTwips + 1,
+				Indice:             11,
+			}
+			bloco := ClassificarPorEstiloDocx(bruto)
+
+			assert.Equal(t, cdm.Citacao, bloco.Papel)
+			assert.Equal(t, confiancaRecuoCitacaoEsperada, bloco.Confianca,
+				"recuo é evidência mais fraca que estilo nomeado, e precisa ficar ABAIXO de LimiteConsulta (0,7) para o bloco seguir candidato ao fallback")
+			assert.Equal(t, cdm.OrigemEstiloDocx, bloco.Origem)
+		})
+	}
+}
+
+// A5 — as recusas do sinal de recuo, um termo por caso.
+func TestClassificarPorEstiloDocxRecuoNaoViraCitacaoNessesCasos(t *testing.T) {
+	t.Parallel()
+
+	casos := []struct {
+		nome              string
+		estilo            string
+		recuo             int
+		papelEsperado     cdm.Papel
+		confiancaEsperada float64
+	}{
+		{
+			nome:              "recuo EXATAMENTE no limiar não classifica: a comparação é estrita",
+			recuo:             limiarRecuoCitacaoTwips,
+			estilo:            "Normal",
+			papelEsperado:     cdm.Paragrafo,
+			confiancaEsperada: confiancaEstiloConhecido,
+		},
+		{
+			nome:              "recuo um twip abaixo do limiar não classifica",
+			recuo:             limiarRecuoCitacaoTwips - 1,
+			estilo:            "Normal",
+			papelEsperado:     cdm.Paragrafo,
+			confiancaEsperada: confiancaEstiloConhecido,
+		},
+		{
+			nome:              "recuo zero não classifica",
+			recuo:             0,
+			estilo:            "",
+			papelEsperado:     cdm.Paragrafo,
+			confiancaEsperada: confiancaSemEstilo,
+		},
+		{
+			nome:              "Title bloqueia o sinal: o papel do ESTILO vence",
+			recuo:             limiarRecuoCitacaoTwips + 1,
+			estilo:            "Title",
+			papelEsperado:     cdm.Titulo,
+			confiancaEsperada: confiancaEstiloConhecido,
+		},
+		{
+			nome:              "Heading1 bloqueia o sinal: o papel do ESTILO vence",
+			recuo:             limiarRecuoCitacaoTwips + 1,
+			estilo:            "Heading1",
+			papelEsperado:     cdm.Secao(1),
+			confiancaEsperada: confiancaEstiloConhecido,
+		},
+		{
+			nome:              "estilo da lista de C2 com recuo alto sai Citacao por ESTILO, não por recuo: a confiança é a de estilo nomeado",
+			recuo:             limiarRecuoCitacaoTwips + 1,
+			estilo:            "Quote",
+			papelEsperado:     cdm.Citacao,
+			confiancaEsperada: confiancaEstiloConhecido,
+		},
+	}
+
+	for _, caso := range casos {
+		caso := caso
+		t.Run(caso.nome, func(t *testing.T) {
+			t.Parallel()
+
+			bloco := ClassificarPorEstiloDocx(BlocoBruto{
+				Tipo:               TipoBlocoBrutoParagrafo,
+				EstiloNomeado:      caso.estilo,
+				Texto:              "Trecho qualquer do documento.",
+				RecuoEsquerdaTwips: caso.recuo,
+				Indice:             3,
+			})
+
+			assert.Equal(t, caso.papelEsperado, bloco.Papel)
+			assert.Equal(t, caso.confiancaEsperada, bloco.Confianca,
+				"o sinal de recuo não pode nem classificar nem rebaixar a confiança nestes casos")
+			assert.NotEqual(t, confiancaRecuoCitacaoEsperada, bloco.Confianca,
+				"a confiança do sinal de recuo é a marca observável de que ele disparou: nenhum caso de A5 pode carregá-la")
+		})
+	}
+}
+
+// A11 — o caminho completo sobre docxSintetico: ExtrairBlocos -> camada 1 ->
+// AplicarHeuristica. Os textos são escolhidos para não casar com NENHUMA
+// regra textual da camada 2 e para não abrir região, de modo que o que o
+// teste observa é só a classificação de citação atravessando as três etapas.
+func TestPipelineSinteticoClassificaCitacaoPorRecuoEPorEstilo(t *testing.T) {
+	t.Parallel()
+
+	documentoXML := documentoXMLComCorpo(
+		`<w:p><w:pPr><w:pStyle w:val="Normal"/><w:ind w:start="2268"/></w:pPr><w:r><w:t>Trecho apresentado em bloco recuado de quatro centímetros.</w:t></w:r></w:p>` +
+			`<w:p><w:pPr><w:pStyle w:val="Quote"/></w:pPr><w:r><w:t>Trecho apresentado com o estilo nomeado de citação.</w:t></w:r></w:p>`)
+
+	brutos := extrairBlocosSemPanicDe(t, documentoXML)
+	require.Len(t, brutos, 2)
+	require.Greater(t, brutos[0].RecuoEsquerdaTwips, limiarRecuoCitacaoTwips,
+		"pré-condição: o primeiro bloco precisa ter chegado da extração com recuo ACIMA do limiar")
+	require.Equal(t, "Quote", brutos[1].EstiloNomeado, "pré-condição: o segundo bloco precisa ter chegado com o estilo de citação")
+
+	classificados := make([]cdm.Bloco, len(brutos))
+	for i, bruto := range brutos {
+		classificados[i] = ClassificarPorEstiloDocx(bruto)
+	}
+
+	saida, err := cdm.AplicarHeuristica(classificados)
+	require.NoError(t, err)
+	require.Len(t, saida, 2)
+
+	assert.Equal(t, cdm.Citacao, saida[0].Papel, "citação por RECUO precisa sobreviver às três etapas")
+	assert.Equal(t, confiancaRecuoCitacaoEsperada, saida[0].Confianca)
+	assert.Equal(t, cdm.Citacao, saida[1].Papel, "citação por ESTILO precisa sobreviver às três etapas")
+	assert.Equal(t, confiancaEstiloConhecido, saida[1].Confianca)
+}
+
+// A13 — regra 7 no caminho novo de classificação. NASCE VERDE de propósito:
+// ClassificarPorEstiloDocx não devolve erro e não loga, e ler w:pStyle e
+// w:ind não toca o texto do bloco (diferente da heurística de aspas, que foi
+// retirada do recorte). O teste existe para derrubar quem acrescentar log de
+// conteúdo depois.
+//
+// Não é paralelo: troca o logger padrão do slog, que é estado de processo.
+func TestClassificarCitacaoNaoVazaConteudoDoDocumentoParaErroOuLog(t *testing.T) {
+	marca := "MARCA-UNICA-DE-CONTEUDO-nao-pode-vazar-4f91ab"
+
+	var registro bytes.Buffer
+	anterior := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&registro, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(anterior) })
+
+	documentoXML := documentoXMLComCorpo(
+		`<w:p><w:pPr><w:pStyle w:val="Quote"/><w:ind w:start="2268"/></w:pPr><w:r><w:t>` + marca + `</w:t></w:r></w:p>`)
+
+	dados := docxSintetico(t, documentoXML)
+	doc, err := Abrir(bytes.NewReader(dados), int64(len(dados)))
+	require.NoError(t, err)
+
+	brutos, err := doc.ExtrairBlocos()
+	require.NoError(t, err, "pré-condição: o caminho novo não pode falhar neste documento")
+	require.Len(t, brutos, 1)
+	require.Contains(t, brutos[0].Texto, marca, "pré-condição: a marca precisa estar no texto para o teste valer algo")
+
+	bloco := ClassificarPorEstiloDocx(brutos[0])
+	saida, err := cdm.AplicarHeuristica([]cdm.Bloco{bloco})
+	require.NoError(t, err)
+	require.Len(t, saida, 1)
+	require.Equal(t, cdm.Citacao, saida[0].Papel, "pré-condição: o caminho novo de classificação precisa ter sido exercitado")
+
+	assert.NotContains(t, registro.String(), marca,
+		"conteúdo de documento do usuário não pode ir para log, nem pelo caminho novo de classificação de citação (regra 7)")
 }

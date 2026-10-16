@@ -1,225 +1,152 @@
 # Retomada
 
-Atualizado em 15/10/2026. Recorte `f3-ruleset-campos-silentes` **CONCLUÍDO**.
-A **engenharia da F3 está completa** e existe o primeiro perfil normativo real.
+Atualizado em 16/10/2026. Recorte `f3-cdm-classifica-citacao` **CONCLUÍDO**.
+`cdm.Citacao` deixou de ser papel declarado e nunca atribuído. A engenharia da
+F3 segue completa; **o que falta para conformidade real são os mutadores por
+papel**, que agora têm o pré-requisito pronto.
 
-## O que ficou pronto
+## O que ficou pronto neste recorte
 
-`ruleset.Corpo` tem cinco campos opcionais (ponteiro, `omitempty` em json e
-yaml): `Fonte`, `Alinhamento`, `RecuoCM`, `EspacoAntesPT`, `EspacoDepoisPT`.
-`nil` = a norma é silente, preserve o documento. `AplicarPlano` pula o mutador
-correspondente; `AplicarTipografia` recebe `*string` e com `nil` grava só
-`w:sz`/`w:szCs`, preservando o `w:rFonts`.
+Camada 1 (`internal/infra/ooxml/blocos.go`) produz `cdm.Citacao` por dois
+caminhos:
 
-`backend/rulesets/abnt-14724/v1.yaml` — primeiro perfil normativo, da ABNT NBR
-14724:2024 que o usuário forneceu em PDF. Cada valor com seção citada: A4
-21 × 29,7 e margens 3/2/3/2 de §5.1, corpo 12 de §5.1, entrelinha 1,5 de §5.2.
-As cinco chaves silentes **ausentes**, com o motivo em comentário.
+- **estilo nomeado**, confiança 0,95: `Citao`, `Blocodecitao`, `Quote`,
+  `IntenseQuote`. Lista **medida** no `soffice`, não intuída — o LibreOffice
+  descarta os caracteres não-ASCII do styleId, então `"Citação"` sai `Citao` e
+  `"Título 1"` sai `Ttulo1user`. `"Citacao"`, `"Citação"` e `"BlockQuote"`
+  nunca chegam de ferramenta conhecida.
+- **recuo à esquerda** acima de `limiarRecuoCitacaoTwips = 567` (1 cm; 1440 ÷
+  2,54 = 566,93 por cm), confiança **0,5** — abaixo de `LimiteConsulta` 0,7 de
+  propósito, para o bloco seguir candidato ao desempate do Jev.
 
-**Evidência em 15/10 21:52:** gates PASS, lint 0 issues, suíte global `-race`
-exit 0 com 34 pacotes, integração com Podman ok (`data/postgres` 18.375s,
-`infra/fila` 18.394s). Reverificado depois das duas correções de comentário.
+`BlocoBruto.RecuoEsquerdaTwips` lê `w:ind` com **três guardas**: só parágrafo,
+primeiro `w:ind` vence, e `Skip()` da subárvore de `w:pPrChange` antes de contar
+profundidade. `w:start` tem precedência sobre `w:left` **quando parseia** (o
+LibreOffice emite `w:start`; medido). `w:leftChars` não é lido. Negativo,
+medida universal e overflow saneiam para 0, sem erro e sem pânico.
 
-## O que falta para a F3 fechar DE FATO
+`cdm.AplicarHeuristica` ganhou a guarda de **C5** (um termo: `Papel !=
+Paragrafo`) e a delimitação de **C6** (dois termos:
+`ehCabecalho(bloco.Papel) || ehCabecalho(papelPeloTexto)`).
 
-A engenharia está pronta, mas o perfil cobre só **§5.1 e §5.2** no que o motor
-sabe aplicar — margens, corpo e entrelinha. Faltam, por ordem de valor:
+## Evidência real — 16/10/2026, dir `backend`
 
-1. **Exceções de espaçamento simples da §5.2** (citação longa, nota, referência,
-   legenda): dependem de o CDM classificar esses papéis e de **mutadores por
-   papel**, que não existem. É o maior buraco de conformidade real.
-2. **NBR 10520** (citações) e **NBR 6023** (referências), a que a 14724 remete
-   em §5.5 e §5.4. As tabelas na skill `normas-abnt` seguem **vazias** — exigem
-   a fonte oficial de cada uma, como a 14724 exigiu.
-3. **Numeração de página** (§5.3): exige mutar cabeçalho, que o motor não toca.
-4. **Filete de 5 cm e fonte menor da nota de rodapé** (§5.2.1).
+| Comando | Resultado |
+|---|---|
+| `go build ./... && go vet ./... && go vet -tags=integration ./... && gofmt -l .` | exit 0, sem saída |
+| `golangci-lint run ./...` | `0 issues.` |
+| `go test ./... -race -count=1 -shuffle=on` | nenhuma linha `FAIL` |
+| `go test ./internal/infra/ooxml ./internal/domain/cdm -race -count=1 -cover` | `ok` 96,292s 90,6% · `ok` 1,061s 94,6% — **statements, não condições** |
 
-## Erro de processo registrado, para não repetir
+Integração **não** executada: `go vet -tags=integration` compila as tags mas não
+sobe testcontainers, e o recorte não toca `data/postgres`. Para rodar, Podman,
+como documentado em `backend/migrations/README.md:13-27`.
 
-Este recorte foi pré-auditado só pela arquitetura, com a justificativa de que
-não havia superfície HTTP nova. A segurança apontou que isso é errado: **"sem
-superfície HTTP nova" não equivale a "sem mudança no conjunto de entradas
-aceitas"**. O recorte alterou a alcançabilidade de um validador de fronteira
-(`validarAlvoTipografia`) e um contrato de serialização amarrado a teste de
-imutabilidade. O resultado é sólido, mas por sorte de execução.
-**Regra daqui em diante: mudança em validador de fronteira ou em contrato de
-serialização chama segurança, mesmo sem rota nova.**
+Revisões: validador **APROVA COM RESSALVA** em duas rodadas (a segunda com
+sondas de mutação); segurança **APROVA COM RESSALVA**, sem achado crítico ou
+alto.
 
-## Débitos abertos
+## A lição deste recorte: "nasceu verde" ≠ "mata mutante"
 
-Completos em `docs/estado-do-backend.md`, seção "Medição de 15/10". Os que mais
-importam:
+A19 foi escrito para blindar o limite do termo 2 de C6 e **não blindava**. O
+validador mutou `ehCabecalho(papelPeloTexto)` para `casou` e a suíte de `cdm`
+inteira passou, A19 incluído: em A19 o bloco do meio é `Paragrafo` e por isso
+**nunca alcança a guarda**. A20 (`Citacao "Tabela 1 — distribuição"` dentro da
+região) é o único vermelho sob aquele mutante, reproduzido com `go test
+-overlay`.
 
-- **Mutação que sobrevive:** `definicao.go:224-231` reporta campo `"corpo"` para
-  `EspacoAntesPT` e `EspacoDepoisPT`, não `corpo.espaco_antes`/`_depois`, e A1
-  codifica isso — **trocar os dois campos entre si não seria detectado por teste
-  algum**. Corrigir exige mudar produção e um critério que hoje passa.
-- Perda permanente do par (documento, perfil) após qualquer falha do worker;
-  recuperação exige caso de uso de reenfileiramento **escopado ao dono**.
-- Job em `executando` sem lease nem reclaim.
-- Procedência do ruleset modelada como URL única, o que não serve para norma
-  técnica — a F6 vai precisar de procedência estruturada.
-- `TamanhoPT` obrigatório embora §5.1 diga "Recomenda-se".
+**Consequência para o registro de evidência deste projeto:** A20 tem morte de
+mutante medida; A18 e A19 não. Cobertura de statements não distingue as duas, e
+critério que nasce verde precisa dizer contra o quê ele é blindagem.
+
+## Erros de processo registrados, para não repetir
+
+1. **Paralelismo que destruiu evidência.** Rodei testador e codador ao mesmo
+   tempo, então A19 foi medido contra a árvore **já consertada** — o que não
+   distingue "blindagem" de "código inalcançável". Declarei o viés achando que
+   custava uma leitura; custou um critério falso. Quando um teste existe para
+   provar que um conserto está certo, meça-o **antes** do conserto.
+2. **Afirmação sem prova dentro do próprio contrato.** C6 dizia "A19 existe
+   para pegar isso". Não pegava. Contrato não é lugar de hipótese sobre
+   cobertura.
+3. **Asserção impossível em A1**, minha: "nenhum caso acima do limiar" é falso
+   por construção, porque A11 depende de 2268 estar acima de 567.
+4. **Contradição interna que três auditorias não viram:** C5 exigia
+   `Confianca > confiancaRegiao` com a confiança do recuo em 0,5 e
+   `confiancaRegiao` em 0,6 — e aquele termo não tinha nenhum caso que
+   falsificasse sua remoção, violando a regra 12 dentro da spec.
+5. **Sexto comentário mentiroso** (bloqueante B1): um comentário prometia um
+   "bloco de controle" que não existia na entrada do teste.
+
+## Próximo recorte — mutadores por papel
+
+Habilita as **exceções de espaçamento simples da §5.2** (citação longa, nota,
+referência, legenda), que é o maior buraco de conformidade real. Pré-requisito
+pronto: `Citacao` agora é produzido.
+
+**Primeira pergunta a resolver, antes de qualquer contrato:** qual é o **piso de
+confiança que autoriza mutar**. Sem ele, um parâmetro de detecção (0,5 para
+recuo, 0,6 para região, 0,8 para regra textual) vira fato normativo no documento
+entregue ao usuário. Citação por recuo tem confiança 0,5 — metade de palpite — e
+aplicar espaçamento simples com base nisso é decidir pelo autor.
+
+Ordem sugerida: definir o piso → contrato dos mutadores por papel → RED →
+código. Em paralelo, o perfil `abnt-14724` **não pode** receber as exceções da
+§5.2 antes disso: arquivo semeado é imutável, e perfil que declare o que o motor
+não aplica é pior que perfil incompleto.
+
+## Débitos abertos (todos em `docs/estado-do-backend.md`, Pendências abertas)
+
+Deste recorte:
+
+- `w:ind` herdado de caixa de texto (`w:txbxContent`): a guarda é só
+  `tipo == Paragrafo` e "o primeiro vence" não distingue aninhamento. Mesma
+  limitação que `w:pStyle` já tinha. BAIXO, achado da segurança.
+- `confiancaRecuoCitacao` (0,5, em `infra/ooxml`) precisa ficar abaixo de
+  `LimiteConsulta` (em `infra/config`), **sem nada que trave o acoplamento**.
+- `regioes[emCaixaAlta]` é consultado antes de qualquer verificação de papel:
+  uma `Citacao "REFERÊNCIAS"` **abre** região, e nada de A7 a A20 cobre.
+  Espelho do defeito que C6 consertou.
+- `ehCabecalho(papelPeloTexto)` acima de `NivelSecaoMaximo` só é exercitado por
+  bloco `Paragrafo`; sem caso, mutar `nivelPelaNumeracao` sobrevive na guarda.
+- `Citacao` dentro de região deixa a região **aberta** e os vizinhos seguem
+  virando `Resumo`: decisão de desenho não declarada por contrato nenhum.
+
+Anteriores, que seguem valendo:
+
+- **MÉDIO, preexistente:** `abrirDocumentoPrincipal` abre `word/document.xml`
+  sem `io.LimitReader` — até 250 MiB por job concorrente. É o `io.LimitReader`
+  que `vo/formatoarquivo.go:167-171` pede desde a F2.
+- Sem teto de job por dono e sem deadline por job (F7). Job em `executando` não
+  tem lease nem reclaim, então documento pode ficar preso em `formatando`.
+- Qualquer falha do worker trava **permanentemente** o par (documento, perfil);
+  recuperação exige caso de uso de reenfileiramento com escopo de dono, porque
+  `Reenfileirar` vive no serviço interno sem dono e `fronteira_test.go:49`
+  proíbe o HTTP alcançá-lo.
+- Checksum do ruleset nunca é verificado: reprodutibilidade sem lastro.
+- SSRF em `Fonte`. `envolverPostgres` vaza usuário/banco/endereço para log.
+- Mutação sobrevivente: `definicao.go:224-231` reporta campo `"corpo"` para
+  `EspacoAntesPT` e `EspacoDepoisPT`, então trocá-los é indetectável.
+- `MargensComplementares{}` materializa cabeçalho/rodapé zero quando `pgMar`
+  está ausente.
+
+## Normas: o que falta de fonte
+
+- **NBR 10520** (citações) e **NBR 6023** (referências): tabelas vazias na skill
+  `normas-abnt`, faltam as fontes oficiais. O usuário precisa fornecer.
+- Numeração de página §5.3 exige mutar cabeçalho, que o motor não toca.
+- `abnt-14724/v1.yaml` tem `fonte` apontando para a **página inicial** do
+  catálogo da ABNT, não para o registro individual — URL permanente não
+  confirmada, e o schema (`additionalProperties: false`) não tem chave para
+  registrar isso. O rastro está em comentário.
 
 ## Estado do Git
 
-Branch `f3-motor-e-gate-de-ruleset`, com push em `bddbd9d`. **TRÊS recortes
-concluídos e verdes NÃO estão commitados** — gate de ruleset inativo, endpoint e
-download, e campos silentes mais o perfil normativo. São o delta não rastreado
-sobre esse commit. `main` intocada em `5d106fb`.
+Branch `f3-motor-e-gate-de-ruleset`. Último push em `bddbd9d`; **`6ad0e79` e o
+commit deste recorte são locais**. Não há PR aberto.
 
-A revisão de segurança delimitou que sua aprovação cobre só os seis arquivos do
-delta nomeado; `fila/executor.go`, `rotas/.../controlador.go`,
-`vo/chavestorage.go`, `webservices/formatacao.go` e `webmodel/documento.go` são
-de recortes anteriores e não foram auditados nesta rodada.
+## Agentes e quota
 
-Nenhum agente ativo.
-
-## Pausa posterior em 08/10 — investigação do gate de criação
-
-Usuário autorizou prosseguir com o gate de rulesets inativos. Git e instruções
-reconciliados; nenhum delta prévio em domain/job nem data/postgres/job.go.
-Árvore suja preservada. Nenhum código ou teste alterado nesta rodada.
-A spec ativa permanece f3-leitura-ruleset-por-id, concluída; ainda NÃO foi
-substituída por spec do gate. Evidência focal histórica da leitura preservada
-também em docs/estado-do-backend.md antes da futura substituição.
-
-Fatos conferidos: CriacaoJobRepo.InserirOuObter mantém assinatura; o adaptador
-devolve o job existente mesmo com payload divergente, e Servico.Criar decide
-o conflito. O teste TestInserirOuObterPayloadDivergenteDevolveJobExistente
-documenta essa divisão, embora o comentário da porta pareça prometer conflito
-no adaptador. Não mover a regra incidentalmente. Testes de integração estão
-em data/postgres/postgres_integration_test.go, não job_integration_test.go.
-
-Proposta em investigação, NÃO aprovada: serializar criação por documento,
-reautorizar dono com lock, consultar a chave existente antes de consultar
-ativo, e apenas para job novo ler ruleset sob FOR SHARE até o commit.
-Regra pura no domínio; adaptador coleta fatos e mantém a transação. Avaliar
-FOR UPDATE no documento e READ COMMITTED explícito, custo de serialização e
-testes determinísticos das duas ordens de desativação/criação. Preservar
-repetição terminal, conflito de payload e erros iguais para ausente/inativo.
-Sem novo framework de transação, executor, frontend ou alteração OOXML.
-
-Referência consultada: documentação PostgreSQL 16, explicit-locking.html
-(FOR SHARE bloqueia UPDATE não-chave; FOR KEY SHARE não basta) e
-transaction-iso.html. Isso é fundamento de desenho, não teste executado.
-
-Gate desta rodada, backend: go build ./... && go vet ./... && gofmt -l .
-exit 0, sem saída, em 08/10. Nenhuma suíte executada nesta rodada.
-Quota passou de 69% para 93% na janela de cinco horas (41% semanal);
-pausa exigida pelo AGENTS.md. Nenhum reset consumido.
-
-Investigador concluiu a síntese parcial e foi encerrado. Propôs
-TipoJob.ValidarRulesetParaNovoJob(existe, ativo bool) error em entity/tipo.go:
-para tipo válido que exige ruleset, ausência/inatividade devolvem a mesma
-validação em ruleset_id; análise/preview passam. Ainda faltam fechar os
-testes determinísticos dos locks, erros SQL/contexto e destino do atual
-ON CONFLICT/releitura. Proposta não auditada; nenhuma nova spec gravada.
-Nenhum agente ou comando permanece ativo.
-
-Próximo passo: consultar quota, concluir os pontos pendentes da proposta,
-gravar nova spec apenas depois de preservar a anterior, pré-auditar com
-validador/segurança; então RED → codador → testes/revisões → fechamento.
-Próximo comando: git status --short; ler este checkpoint e a spec ativa.
-Não tratar esta investigação como implementação ou aprovação de contrato.
-
-Atualizado em 08/10/2026. Recorte f3-leitura-ruleset-por-id concluído:
-14 critérios, V1/V2 históricos aprovados e V3 executada neste fechamento.
-A árvore contém alterações de várias sessões e arquivos não rastreados;
-preservar tudo. Nada commitado ou enviado. A spec ativa também está não
-rastreada: não assumir que suas versões anteriores são recuperáveis pelo Git.
-
-## Reconciliação e trabalho desta retomada
-
-O Docker continua ausente, mas o Podman 5.7.0 está instalado e seu socket local
-está disponível. A alternativa já estava documentada em
-backend/migrations/README.md. Não foi preciso instalar software ou alterar
-produção/testes. O acesso ao socket e a execução foram autorizados pelo
-mecanismo de escalonamento do ambiente.
-
-Corrigidas divergências documentais: C3 da spec ainda descrevia cinco colunas,
-embora a correção final use quatro; A11 agora descreve slug inválido, A12 os
-quatro casos de procedência e A14 distingue recusa observada de inferência
-sobre transporte. Estado/mapa atualizados para retirar o bloqueio antigo.
-
-## Evidência real de 08/10/2026
-
-Responsável pela V3: principal. Diretório: backend.
-
-~~~sh
-DOCKER_HOST=unix:///run/user/1000/podman/podman.sock \
-MIGRACOES_REDE_CONTAINER=slirp4netns TESTCONTAINERS_RYUK_DISABLED=true \
-go test ./internal/data/postgres -tags integration -run 'TestObterRulesetPorID' -race -count=1 -v
-~~~
-
-Exit 0; pacote postgres 11.226s. Sete testes principais PASS: perfil semeado,
-ID ausente/zero, flag inativo, definição inválida, quatro divergências de
-slug/versão, contexto cancelado e tamanho exatamente 65536/65537 bytes.
-Testcontainers usou a imagem PostgreSQL fixada por digest no teste. Container
-0dd2892f8b7e criado, parado e removido pelo TestMain. Ryuk desativado apenas
-nesta execução local, com cleanup explícito; não usar prune global.
-
-go build ./... && go vet ./... && gofmt -l .: exit 0, sem saída.
-Nenhuma alteração de produção nesta retomada. V1 e V2 continuam com as
-medições anteriores da spec (V2 de 08/10 às 08:30, 34 pacotes com -race);
-a suíte global não foi repetida. A14 não mede alocação nem tráfego do driver.
-
-Validador e segurança reauditaram independentemente o delta corretivo final,
-somente leitura, e ambos APROVARAM sem bloqueios: SELECT/Scan com quatro
-colunas, NULL acima do teto, teste ligado ao limite do carregador e mensagens.
-Revisão estática não substituiu a execução de V3 acima.
-
-## Contratos entregues
-
-- ConsultaRulesetRepo.ObterPorID(ctx, UUID) devolve Definicao, ativo e erro;
-  porta segregada, exposta por data/contracts e Gerenciador.RulesetsConsulta.
-- decodificarRuleset aplica teto, unmarshal e Validar; corrupção vira
-  ErroAplicacao sem encadear JSON/ErroValidacao ou valores armazenados.
-- SELECT usa CASE/octet_length para devolver NULL acima de 65536 bytes;
-  quatro colunas: payload, slug, versao e ativo. Scan em json.RawMessage;
-  len(dados)==0 recusa o NULL. Confere slug/versao das colunas com o JSON;
-  devolve o flag ativo sem filtrá-lo. Driver sanitizado e contexto propagado.
-
-## Próximo recorte
-
-Preparar spec do gate de ruleset na CRIAÇÃO de job formatar, antes de ligar o
-executor. Conferido nesta retomada:
-
-- domain/job/criacao/servico.go: Criar autoriza o documento e chama
-  InserirOuObter; não consulta ativo.
-- data/postgres/job.go: InserirOuObter reautoriza o dono em transação com
-  FOR SHARE no documento; INSERT ON CONFLICT e releitura asseguram idempotência.
-
-O novo contrato deve decidir a validação de ativo para job NOVO preservando
-repetição idempotente de job existente, conflito de payload e autorização.
-Uma consulta simples antes de InserirOuObter pode recusar uma repetição após
-inativação; consulta e INSERT separados também permitem desativação concorrente.
-São riscos de desenho a resolver na spec e nos critérios de integração,
-sem implantar regras de negócio na camada de dados por conveniência.
-
-Próxima leitura: rg -n 'job-dominio|job.go|ruleset' docs/mapa-modulos.md,
-serviço de criação, porta CriacaoJobRepo e testes de idempotência. Investigador
-usa spec-verificavel; validador/segurança auditam a nova spec antes do RED.
-Não substituir a spec concluída sem preservar suas evidências/pendências.
-
-Depois do gate: fluxo de resultado, armazenamento e branch TipoFormatar;
-propagação de context nos mutadores ao integrá-los. F3 segue sem fluxo completo.
-Não presumir necessidade de migration antes de definir se o resultado pertence
-ao documento ou ao job; a decisão anterior ainda não foi contratada.
-
-## Débitos preservados
-
-Constam em docs/estado-do-backend.md: checksum não conferido, sanitização dos
-demais erros Postgres, deadlines/cancelamento do executor, lint com tag
-integration e validação de Fonte caso venha a ser buscada pelo servidor.
-Trocar o teto concatenado por placeholder é sugestão de estilo, sem bloqueio.
-A mensagem da função pura agrupa vazio/excesso; revisar se ganhar outro uso.
-Não afirmar conformidade normativa nem reprodutibilidade contra alterações
-arbitrárias no banco. Nenhum LLM/Jev foi chamado.
-
-## Agentes, comandos e quota
-
-Dois revisores desta retomada concluídos e encerrados. Nenhum escritor de
-produção delegado; nenhum comando de teste permanece ativo.
-Última quota consultada: 42% da janela de cinco horas e 33% semanal; nenhum
-reset consumido. Consultar novamente antes da próxima delegação.
+Nenhum agente ativo. Testador, validador, codador e segurança foram usados e
+encerrados neste recorte. Quota: consultar antes de abrir o próximo recorte —
+não abrir novo por volta de 80%, parar em ponto seguro perto de 90%.

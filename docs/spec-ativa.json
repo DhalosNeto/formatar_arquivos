@@ -1,71 +1,50 @@
 {
   "versao": 1,
-  "id": "f3-ruleset-campos-silentes",
+  "id": "f3-cdm-classifica-citacao",
   "estado": "concluida",
-  "objetivo": "Dar ao ruleset a capacidade de dizer 'a norma é silente neste campo, preserve o que o documento já tem', e usar isso para escrever o primeiro perfil normativo real a partir da ABNT NBR 14724:2024 — sem inventar nenhum valor que a norma não define.",
+  "objetivo": "Fazer o CDM classificar citação em bloco como cdm.Citacao — papel declarado e NUNCA atribuído — a partir de EVIDÊNCIA no documento (estilo nomeado e recuo à esquerda), e impedir que a inferência por região da camada 2 apague essa classificação. Habilita a exceção de espaçamento simples da §5.2 da ABNT NBR 14724:2024 no recorte seguinte.",
   "fora_escopo": [
-    "NBR 10520 (citações) e NBR 6023 (referências): a 14724 remete a elas em §5.5 e §5.4, e as tabelas da skill seguem vazias. Recorte próprio, com a fonte oficial de cada uma.",
-    "Numeração de página no canto superior direito a 2 cm das bordas (§5.3): exige mutar cabeçalho, que o motor não toca hoje.",
-    "Filete de 5 cm e fonte menor de nota de rodapé (§5.2.1).",
-    "Exceções de espaçamento simples da §5.2 (citações longas, notas, referências, legendas): dependem de o CDM classificar esses papéis e de mutadores por papel, que não existem.",
-    "Perfil de periódico (Geousp, Caminhos da Geografia): é F6 e exige a diretriz de cada revista."
+    "HEURÍSTICA DE ASPAS MAIS TAMANHO: RETIRADA do recorte, não adiada por falta de tempo. A versão anterior desta spec a tinha como sinal primário, com a justificativa de que 'bloco autônomo entre aspas é citação longa'. As duas auditorias mostraram que a premissa está INVERTIDA — aspas evidenciam CITAÇÃO, não EXTENSÃO, e a citação longa é convencionalmente apresentada SEM aspas, logo o sinal erraria 100% das citações longas já formatadas e pegaria epígrafe, diálogo e título de obra. O termo que carregaria a extensão seria um limiar de runas sem fonte normativa, porque a norma condiciona a 'mais de três linhas', propriedade de renderização. Decisão: classificar só onde há evidência, e não inferir extensão.",
+    "cdm.NotaRodape: ESTRUTURALMENTE inalcançável e confirmado pelas duas auditorias. RefXML é o ordinal entre filhos de w:body (cdm/bloco.go:97-105) e lerCorpo só consome filhos de w:body (ooxml/blocos.go:94-123); nota de rodapé vive em word/footnotes.xml, que o motor não abre e que NENHUM dos dois fixtures tem. Classificá-la exigiria RefXML identificar (parte, ordinal), mudando a identidade do CDM e atingindo cdm_jsonb já persistido. Recorte próprio e maior.",
+    "Aplicar formatação a Citacao: este recorte só CLASSIFICA. O espaço simples da §5.2 vem no recorte dos mutadores por papel.",
+    "Recuo de 4 cm e corpo menor da citação longa: são da NBR 10520, cuja tabela na skill está VAZIA. Este recorte usa recuo como SINAL DE DETECÇÃO, e não afirma valor normativo algum.",
+    "cdm.ItemLista, Tabela, Figura, Equacao e ListaAutores, também declarados e nunca atribuídos."
   ],
   "fontes": [
     ".agents/skills/spec-verificavel/SKILL.md",
     ".agents/skills/normas-abnt/SKILL.md",
     ".agents/skills/ooxml-referencia/SKILL.md",
     "CLAUDE.md",
-    "docs/adr/0001-docx-in-place.md",
-    "backend/internal/domain/ruleset/definicao.go",
-    "backend/rulesets/_schema.json",
-    "backend/internal/infra/ruleset/carregar.go",
-    "backend/internal/domain/formatador/plano.go",
-    "backend/internal/infra/ooxml/formatar.go",
-    "backend/internal/infra/ooxml/tipografia.go"
+    "backend/internal/domain/cdm/bloco.go",
+    "backend/internal/domain/cdm/papel.go",
+    "backend/internal/domain/cdm/heuristica.go",
+    "backend/internal/domain/cdm/fallback.go",
+    "backend/internal/infra/ooxml/blocos.go",
+    "backend/internal/infra/config/jev.go"
   ],
   "arquivos": [
     {
-      "caminho": "backend/internal/domain/ruleset/definicao.go",
+      "caminho": "backend/internal/infra/ooxml/blocos.go",
       "acao": "alterar",
       "responsavel": "codador"
     },
     {
-      "caminho": "backend/internal/domain/ruleset/definicao_test.go",
+      "caminho": "backend/internal/infra/ooxml/blocos_test.go",
       "acao": "alterar",
       "responsavel": "testador"
     },
     {
-      "caminho": "backend/rulesets/_schema.json",
-      "acao": "alterar",
-      "responsavel": "codador"
-    },
-    {
-      "caminho": "backend/internal/infra/ooxml/tipografia.go",
-      "acao": "alterar",
-      "responsavel": "codador"
-    },
-    {
-      "caminho": "backend/internal/infra/ooxml/tipografia_test.go",
+      "caminho": "backend/internal/infra/ooxml/heuristica_integrada_test.go",
       "acao": "alterar",
       "responsavel": "testador"
     },
     {
-      "caminho": "backend/internal/infra/ooxml/formatar.go",
+      "caminho": "backend/internal/domain/cdm/heuristica.go",
       "acao": "alterar",
       "responsavel": "codador"
     },
     {
-      "caminho": "backend/internal/infra/ooxml/formatar_test.go",
-      "acao": "alterar",
-      "responsavel": "testador"
-    },
-    {
-      "caminho": "backend/rulesets/abnt-14724/v1.yaml",
-      "acao": "criar",
-      "responsavel": "codador"
-    },
-    {
-      "caminho": "backend/internal/infra/ruleset/carregar_test.go",
+      "caminho": "backend/internal/domain/cdm/heuristica_test.go",
       "acao": "alterar",
       "responsavel": "testador"
     },
@@ -73,145 +52,194 @@
       "caminho": "docs/estado-do-backend.md",
       "acao": "alterar",
       "responsavel": "principal"
+    },
+    {
+      "caminho": "backend/internal/domain/cdm/fallback_test.go",
+      "acao": "alterar",
+      "responsavel": "testador"
+    },
+    {
+      "caminho": "backend/internal/domain/cdm/serializacao_test.go",
+      "acao": "alterar",
+      "responsavel": "testador"
     }
   ],
   "contratos": [
     {
       "id": "C1",
-      "descricao": "Em backend/internal/domain/ruleset/definicao.go, os CINCO campos em que a ABNT NBR 14724:2024 é SILENTE viram ponteiro: Corpo.Fonte *string, Corpo.Alinhamento *string, Corpo.RecuoCM *float64, Corpo.EspacoAntesPT *float64, Corpo.EspacoDepoisPT *float64. nil = A NORMA NÃO DIZ, PRESERVE O DOCUMENTO. Ponteiro e não vazio porque, nos três numéricos, 0 é valor LEGÍTIMO ('zerar o espaço'), logo não serve de sentinela; e misturar convenções no mesmo struct seria pior. TamanhoPT e Entrelinha seguem obrigatórios e por valor: a norma os define (§5.1, §5.2). Corpo.validar aceita nil em cada um e valida o valor quando presente. TAGS: os cinco campos levam `omitempty` em json E yaml, explicitamente. Isso NÃO é detalhe de serialização: prepararRulesets faz json.Marshal mais sha256 e inserirRuleset compara definicao=$4::jsonb para impor imutabilidade (data/postgres/ruleset.go:42-66 e :112-130), e {\"fonte\":null} é jsonb DIFERENTE de chave ausente — decidir a tag depois faria o re-seed de abnt-14724/v1 bater em ErroConflito contra uma versão imutável. nil tem de produzir chave AUSENTE, simétrico ao YAML e ao Carregar. INVARIANTE DE ALIASING, que nenhum critério cobre e por isso tem de estar no contrato: Plano carrega ruleset.Corpo POR VALOR (formatador/plano.go:21,58), então os cinco ponteiros ALIASAM a Definicao lida do banco. São SOMENTE LEITURA: nenhum mutador pode desreferenciar para escrever. Sem esta cláusula é uma regressão invisível daqui a dois recortes."
+      "descricao": "BlocoBruto ganha RecuoEsquerdaTwips int, lido do w:ind do w:pPr do PRÓPRIO parágrafo, com TRÊS guardas. As duas que EstiloNomeado já usa em blocos.go:151 — `tipo == TipoBlocoBrutoParagrafo` e 'primeiro vence' — MAIS UMA TERCEIRA que a spec anterior dizia ser desnecessária e o testador provou que é: IGNORAR A SUBÁRVORE DE w:pPrChange. 'Primeiro vence' NÃO basta, porque se o ÚNICO w:ind do parágrafo vive dentro do w:pPrChange — que guarda as propriedades ANTIGAS de uma revisão rastreada — então 'primeiro vence' devolve justamente o recuo REVOGADO. O caso de A1 é construído sem w:ind corrente de propósito: com um antes, ele seria indistinguível do termo 'primeiro vence' e vacuoso. A guarda de tipo não é zelo: sem ela, um w:ind de parágrafo DENTRO de célula contamina o BlocoBruto do w:tbl. A de 'primeiro vence' também não: sem ela, um w:pPr dentro de w:pPrChange — revisão rastreada, que guarda as propriedades ANTIGAS — faria um recuo REVOGADO classificar Citacao. ATRIBUTOS A LER, e esta lista é MEDIDA: `w:start` ANTES de `w:left`, porque o LibreOffice emite `<w:ind w:start=\"2268\"/>` — reproduzi convertendo um .fodt com fo:margin-left=4cm por soffice --headless, e a versão anterior desta spec lia só `w:left`, logo leria ZERO no produtor alvo, repetindo a classe de erro do portão de `Normal`. `w:leftChars` NÃO é lido: tem precedência sobre left no Word e unidade diferente (centésimos de caractere), então lê-lo como twips daria número sem sentido — bloco que só o tenha fica com 0, e isso é limite declarado. SANEAMENTO: valor não numérico, overflow de strconv ou NEGATIVO (recuo pendente) viram 0, nunca erro e nunca pânico — ST_SignedTwipsMeasure aceita negativo e medida universal como \"4cm\", e nada disso pode virar 'acima do limiar'. atributoW já aceita namespace vazio além do w:."
     },
     {
       "id": "C2",
-      "descricao": "backend/rulesets/_schema.json: os cinco campos saem de `required` do objeto `corpo`, que hoje exige todos os sete, e `additionalProperties: false` permanece. Tipos e restrições de cada campo permanecem para quando o campo estiver presente. tamanho_pt e entrelinha seguem em `required`. Ausência da chave no YAML é o que produz nil em Go — é esse o caminho que o perfil normativo usa, e não uma chave presente com valor nulo."
+      "descricao": "Em papelPeloEstilo, estilo nomeado de citação devolve cdm.Citacao com confiancaEstiloConhecido. A LISTA É MEDIDA, NÃO SUPOSTA, e a versão anterior desta spec estava ERRADA: o LibreOffice emite o nome LOCALIZADO com os caracteres não-ASCII DESCARTADOS, não transliterados. Medi convertendo um .fodt com soffice --headless: o estilo 'Citação' saiu como `Citao`, e 'Título 1' como `Ttulo1user`. A auditoria mediu 'Bloco de citação' saindo como `Blocodecitao`. Logo `Citacao` e `Citação` NUNCA chegam do LO. Lista: `Citao`, `Blocodecitao`, `Quote` e `IntenseQuote` (styleIds latent-English do Word, estáveis por locale). `BlockQuote` NÃO entra: nenhuma ferramenta conhecida o emite. REGISTRAR no comentário que a lista é intrinsecamente FRÁGIL, porque o styleId do LO depende do idioma de quem salvou, e que o caminho robusto é o recuo de C3. Comparação exata e sensível a caixa, no idioma dos `Title`/`Normal`/`Heading` que já existem (blocos.go:243-252) — a versão anterior pedia insensível a caixa, inconsistente com o arquivo."
     },
     {
       "id": "C3",
-      "descricao": "(*ooxml.Documento).AplicarTipografia(referencias []int, fonte *string, tamanhoPT float64) — PONTEIRO, não string vazia. nil significa norma silente e grava SOMENTE w:sz e w:szCs, preservando o w:rFonts do documento; &\"\" continua devolvendo *errors.ErroValidacao por ValidarFonteCorpo, como hoje. O sentinela de string vazia foi RECUSADO na pré-auditoria por um motivo concreto: transformaria qualquer \"\" acidental — plano montado errado, campo esquecido num caminho que não venha do YAML — em no-op silencioso, apagando uma recusa que existe. Com ponteiro há UMA representação do YAML ao XML e a recusa permanece. É o caso central do recorte: a norma define o TAMANHO (§5.1, 'fonte tamanho 12') e NÃO define família — grep -ci 'times new roman' no PDF devolve 0, sem menção a Arial. A ordem de CT_RPr é preservada: montarFilhosTipografia concatena rFonts, sz, szCs (tipografia.go:236-240) e a inserção por rank usa ordemTipografiaRun (:186-195), logo omitir rFonts não desordena. CONSEQUÊNCIA ACEITA E DECLARADA: com fonte silente o nó rFonts deixa de ser alvo, então validarAlvoTipografia (:204-229) não roda para ele e um rFonts com atributo de tema ou homônimo sem namespace deixa de recusar o documento. Isso é CORRETO — não mutamos o nó, não há conflito a resolver — e tem critério próprio para a decisão não ser confundida com regressão."
+      "descricao": "Em papelPeloEstilo, RECUO À ESQUERDA acima de limiarRecuoCitacaoTwips = 567 devolve cdm.Citacao. ARITMÉTICA MOSTRADA no comentário, sem invocar a 10520: 1440 twips por polegada dividido por 2,54 dá 566,93 por centímetro, logo 567 é exatamente 1 cm; o corpo de texto dos dois fixtures tem recuo 0, e a convenção de 4 cm fica em 2268, bem acima — então o limiar separa 'recuado de propósito a partir de 1 cm' de 'sem recuo', e pega tanto o recuo modesto quanto o de 4 cm. Número com aritmética é revisável; número mágico não. É o sinal MAIS PRECISO dos dois e o único que pega a citação longa JÁ FORMATADA — que, por convenção, é apresentada sem aspas e por isso seria 100% perdida por qualquer heurística de aspas. O limiar é parâmetro de DETECÇÃO e o comentário tem de dizer isso: a NBR 10520, que fixaria o recuo normativo, NÃO está disponível no projeto (tabela vazia na skill), então o valor é escolha de engenharia para distinguir 'recuado de propósito' de 'sem recuo', e NÃO pode ser apresentado como requisito de norma. Confiança PRÓPRIA, menor que a de estilo nomeado, porque recuo tem outras causas. PORTÃO DERIVADO, não lista literal: o sinal de recuo é consultado quando o estilo NÃO DETERMINOU OUTRO PAPEL — isto é, quando papelPeloEstilo chegaria a Paragrafo, seja por estilo vazio, desconhecido ou `Normal`. Derivar em vez de enumerar (`\"\"`, `Normal`, `BodyText`) evita que o portão deixe de valer em silêncio quando alguém acrescentar um estilo ao switch de blocos.go:243-252 — e `BodyText` hoje já cai em desconhecido. Medi que `Normal` é estilo CONHECIDO em blocos.go:246 com confiança 0.95, e que 47 dos 57 parágrafos de artigo-real-libreoffice.docx o usam: com o portão antigo o sinal NUNCA dispararia no documento LibreOffice, que é o caso de uso alvo. Estilo que determina OUTRO papel (Title, HeadingN, estilo de citação) bloqueia o sinal. LIMITE DECLARADO, e ele é grande: C3 lê recuo DIRETO no w:pPr. Recuo HERDADO de estilo nomeado mora em styles.xml, que ExtrairBlocos não abre — e a citação longa já formatada pelo LibreOffice costuma indentar PELO ESTILO. Na minha medição o LO materializou o w:ind nos dois lugares, mas isso é comportamento dele, não garantia do formato. Quando o recuo vive só no estilo, quem pega é C2, pelo NOME do estilo — e o caso que escapa dos dois é estilo fora da lista cujo recuo vive só em styles.xml."
     },
     {
       "id": "C4",
-      "descricao": "(*ooxml.Documento).AplicarPlano PULA cada mutador de corpo cujo campo correspondente for nil no plano: Alinhamento nil não chama AplicarAlinhamento, RecuoCM nil não chama AplicarRecuoPrimeiraLinha, EspacoAntesPT e EspacoDepoisPT nil não chamam os respectivos. Fonte nil é REPASSADA COMO NIL a AplicarTipografia, que grava só o tamanho — ver C3. CORREÇÃO DOCUMENTAL: este contrato dizia 'passa string vazia', resquício da versão anterior a C3 ter virado ponteiro; a pré-auditoria recusou o sentinela de string vazia e o codador implementou o repasse como nil, que é o certo e o que ooxml/formatar_test.go exige. Ele sinalizou a divergência em vez de seguir o texto desatualizado. AplicarPagina e AplicarEntrelinha seguem sempre chamados, porque margens e entrelinha são normativas e obrigatórias no schema. A ATOMICIDADE não muda: a cópia com partesSubstituidas clonado e a troca do mapa só depois de todos os mutadores chamados retornarem nil permanecem exatamente como estão. Pular mutador NÃO é falha: é o plano dizendo que não há o que aplicar, e o documento sai com aquele aspecto preservado byte a byte, o que é o espírito do ADR 0001."
+      "descricao": "A CONFIANÇA de C3 fica estritamente ABAIXO de LimiteConsulta, cujo default de produção é 0.7 (infra/config/jev.go:26), e acima de confiancaSemEstilo (0.2) — VALOR FIXO 0.5, não faixa: A12 e A14 prometem valor observável, e teste não afere intervalo. A versão anterior dizia só 'abaixo de confiancaEstiloConhecido (0.95)', intervalo que contém 0.8, e com 0.8 o bloco SAIRIA do conjunto de candidatos do fallback (cdm/fallback.go:87 exige Confianca < LimiteConsulta) — isto é, a própria spec permitia eliminar o desempate que ela prometia. Ambas as auditorias pegaram isso de forma independente. A confiança de C2 (estilo nomeado) fica ACIMA do limite de propósito: evidência declarada pelo documento não precisa de desempate."
     },
     {
       "id": "C5",
-      "descricao": "backend/rulesets/abnt-14724/v1.yaml, o PRIMEIRO perfil normativo real do projeto. O campo `nome` CARREGA O LIMITE, algo como 'ABNT NBR 14724:2024 — margens, corpo e entrelinha', porque é o único campo que chega à tela quando o catálogo existir, e o comentário de YAML atende dev e não usuário. `fonte` é https://www.abntcatalogo.com.br/ — a PÁGINA INICIAL do catálogo oficial, NÃO o registro individual, que o usuário informou não ter conseguido confirmar como URL permanente. O schema exige string com pattern ^https?:// e additionalProperties false (rulesets/_schema.json), então procedência estruturada (tipo, organismo, identificador, registro_verificado) NÃO cabe no arquivo. Compensação, porque o campo fica impreciso: o IDENTIFICADOR vai em `nome`, que é o dado citável e o único campo que chega à tela — 'ABNT NBR 14724:2024 — margens, corpo e entrelinha'. E `registro_verificado: false` vira COMENTÁRIO no YAML, nunca chave, porque additionalProperties a recusaria. Nenhuma rede é tocada no carregamento (carregarBloqueado, carregar.go:156), então a URL não é resolvida em tempo algum — ela é rastro para humano, não dependência. Conteúdo: com SOMENTE o que a ABNT NBR 14724:2024 define, cada valor rastreável a uma seção: pagina.largura_cm e altura_cm de A4 (21,0 x 29,7); margens superior 3, inferior 2, esquerda 3, direita 2, de §5.1 alínea a) para o anverso; corpo.tamanho_pt 12, de §5.1; corpo.entrelinha 1.5, de §5.2. As CINCO chaves silentes são OMITIDAS do arquivo — fonte, alinhamento, recuo_cm, espaco_antes_pt e espaco_depois_pt — e o YAML tem comentário dizendo, para cada uma, que a norma não a define e que omitir é deliberado. O arquivo é semeado e IMUTÁVEL (CLAUDE.md): mudança de diretriz cria v2.yaml. O perfil cobre a §5.1 e a §5.2 no que o motor sabe aplicar hoje; NÃO cobre numeração de página (§5.3, exige cabeçalho), nota de rodapé (§5.2.1) nem as exceções de espaçamento simples da §5.2, e isso tem de estar escrito no arquivo para ninguém ler o perfil como 'ABNT completa'. O que o perfil cobre e o que ele NÃO cobre vai para docs/estado-do-backend.md, não só para comentário no YAML: por CLAUDE.md informação durável mora em estado/plano/contrato."
+      "descricao": "Em cdm.AplicarHeuristica, a inferência por região NÃO rebaixa bloco cujo papel seja DIFERENTE de Paragrafo. UM TERMO SÓ, e a redução vem de contradição interna que o TESTADOR achou depois de três rodadas de auditoria: a versão anterior exigia também `Confianca > confiancaRegiao`, mas C4 fixa a confiança do sinal de recuo em 0.5 e confiancaRegiao é 0.6 (heuristica.go:17) — logo o Citacao vindo de recuo SERIA rebaixado, contradizendo A7, que promete que ele resiste. Pior: com os critérios do recorte, o termo de confiança NÃO TEM NENHUM CASO que falsifique sua remoção (A7 e A8 só exercitam papel não-default, A9 só exercita Paragrafo), ou seja era peso morto e violação da regra 12 dentro da própria spec. O princípio, agora com uma formulação que se sustenta: Paragrafo significa 'nenhum papel determinado', e palpite posicional só PREENCHE bloco sem papel — nunca sobrescreve papel que algo determinou, em qualquer confiança. Confiança é ortogonal a isso: um Citacao de 0.5 é uma determinação, e quem resolve a dúvida é o fallback, que o recebe por estar abaixo de LimiteConsulta. O conserto é GERAL: ehCabecalho(Titulo) também é falso (heuristica.go:132), então um Titulo dentro de região aberta já é sobrescrito hoje, e a regra conserta os dois. VERIFICAÇÃO EMPÍRICA: os blocos 7, 10 e 36-39 de heuristica_integrada_test.go chegam da camada 1 como Paragrafo@0.95 vindo de `Normal` e devem continuar saindo Resumo/Referencia — se a regra incluir confiança, esse teste que passa hoje QUEBRA."
+    },
+    {
+      "id": "C6",
+      "descricao": "Em cdm.AplicarHeuristica, proteger o papel de um bloco não desliga a DELIMITAÇÃO dos vizinhos: a região aberta é encerrada por DOIS termos independentes, e bloco de papel determinado continua passando pelos dois. Termo 1: o papel do próprio bloco é cabeçalho (ehCabecalho, ou seja Secao). Termo 2: o TEXTO do bloco casa numeração de seção, qualquer que seja o papel dele. ORIGEM: achado R1 do validador. A guarda de C5, posicionada antes das regras textuais, desligou o termo 2 para todo bloco não-Paragrafo — caso concreto: [Paragrafo \"RESUMO\", Titulo \"1 INTRODUÇÃO\", Paragrafo \"texto\"] fechava a região antes do recorte (o texto dava Secao(1) e ehCabecalho fechava) e passou a deixá-la ABERTA, porque ehCabecalho(Titulo) é falso (heuristica.go:132) — o terceiro bloco saía Resumo@0.6. Nenhum critério de A7 a A16 cobria isso e os fixtures não pegam, porque lá os cabeçalhos vêm de HeadingN e já dão Secao. Isto NÃO reintroduz 'texto manda no papel declarado', que C5 rejeita: o bloco mantém o papel dele intacto e o que o texto afeta é só regiaoAberta, isto é a classificação dos vizinhos. Fechar região é delimitação, não reclassificação. LIMITE DO TERMO 2, achado pelo testador no RED: 'casa numeração de seção' é literal e NÃO é 'casa alguma regra textual'. papelPorRegraTextual também reconhece palavras-chave e legenda, e essas NÃO fecham região — é o que heuristica.go:107 já distingue, porque legenda e palavras-chave aparecem DENTRO de uma região sem encerrá-la. Implementar C6 movendo a guarda de C5 para depois do bloco textual, sem replicar o ehCabecalho(papel) interno, faria 'Tabela 1' passar a fechar região. CORRECAO DE UMA AFIRMACAO FALSA DESTE PROPRIO CONTRATO: a versao anterior dizia que A19 pega isso, e NAO pega. O validador provou por mutacao: trocar ehCabecalho(papelPeloTexto) por `casou` deixa a suite de cdm inteira passando, A19 incluido, porque em A19 o bloco do meio e Paragrafo e portanto NUNCA alcanca esta guarda — A19 cobre o ehCabecalho do ramo textual que ja existia, nao o termo 2 novo. Quem pega e A20: bloco de papel DETERMINADO cujo texto casa regra textual que nao e cabecalho."
     }
   ],
   "criterios": [
     {
       "id": "A1",
       "contrato": "C1",
-      "cenario": "Definicao válida com os cinco campos silentes nil, e com cada um deles presente e válido, e com cada um presente e INVÁLIDO (fonte vazia, alinhamento desconhecido, recuo que não cabe em twips), um termo por caso",
-      "esperado": "Validar() devolve nil quando os cinco são nil e quando os cinco são presentes e válidos; devolve *errors.ErroValidacao no campo correspondente quando o campo está PRESENTE e inválido. Cada caso falha se a validação do termo for removida ou se nil passar a ser tratado como valor",
+      "cenario": "ExtrairBlocos sobre docxSintetico, um termo por caso, no vetor de entrada NÃO CONFIÁVEL: w:ind com w:start; com w:left; com os dois; com w:leftChars apenas; com valor NEGATIVO; com medida universal (\"4cm\"); com inteiro de 20 dígitos; com w:start INVÁLIDO (\"4cm\") ao lado de um w:left VÁLIDO; com w:start NEGATIVO ao lado de um w:left VÁLIDO; com w:ind REPETIDO no mesmo w:pPr; com w:ind dentro de w:pPrChange; com w:ind em parágrafo DENTRO de célula de w:tbl; w:pPr sem w:ind; e sem w:pPr",
+      "esperado": "w:start é lido com precedência sobre w:left, mas a precedência vale só quando o w:start PARSEIA: w:start=\"4cm\" ao lado de w:left=\"2268\" devolve 2268, não 0 — achado BAIXO da segurança, em que a precedência vencia antes do saneamento e descartava o único valor utilizável; w:leftChars sozinho dá 0; negativo dá 0; medida universal e overflow dão 0, SEM erro e SEM pânico; w:ind repetido usa o PRIMEIRO; w:ind em w:pPrChange é IGNORADO, porque guarda propriedade revogada; w:ind de parágrafo em célula NÃO contamina o BlocoBruto do w:tbl, que fica com 0; e os dois últimos dão 0. Cada caso é pinado pelo VALOR exato, e não por faixa: a cláusula anterior exigia que nenhum caso ficasse 'acima do limiar', o que é falso por construção — w:start=2268 e w:left=1134 estão acima de 567 de propósito, e A11 DEPENDE de 2268 estar acima para provar que o recuo classifica. A asserção de faixa contradizia a tabela do próprio critério e nada acrescentava: assert.Equal com o valor esperado já falha se o saneamento devolver MaxInt, negativo grande ou qualquer número errado. E w:start=\"-567\" ao lado de w:left=\"2268\" devolve 0, NÃO 2268: a precedência de w:start vale quando ele PARSEIA, e negativo parseia — o saneamento o zera depois. É a única assimetria com a regra de 'não descartar o único valor utilizável', está declarada em comentário de produção e o validador apontou que não tinha caso; agora tem",
       "verificacao": "V1"
     },
     {
       "id": "A2",
-      "contrato": "C1",
-      "cenario": "RecuoCM, EspacoAntesPT e EspacoDepoisPT apontando para 0 explícito",
-      "esperado": "Validar() devolve nil: ponteiro para 0 é valor legítimo e aceito. Este critério prova SÓ isso — a DISTINÇÃO entre ponteiro-para-0 e nil NÃO é observável em Validar(), porque os dois devolvem nil, e exigi-la aqui era critério que nenhuma implementação poderia derrubar, inclusive uma que colapsasse nil em 0 na entrada. A distinção é aferida no XML, em A13",
+      "contrato": "C2",
+      "cenario": "BlocoBruto com EstiloNomeado em cada nome da lista medida: Citao, Blocodecitao, Quote, IntenseQuote",
+      "esperado": "cdm.Citacao com confiancaEstiloConhecido e OrigemEstiloDocx. Um caso por nome: remover um da lista quebra exatamente o caso dele",
       "verificacao": "V1"
     },
     {
       "id": "A3",
-      "contrato": "C1",
-      "cenario": "TamanhoPT e Entrelinha ausentes ou zero",
-      "esperado": "*errors.ErroValidacao: estes dois NÃO são opcionais, porque a norma os define (§5.1 e §5.2). Falha se alguém os tornar opcionais junto dos outros cinco",
+      "contrato": "C2",
+      "cenario": "EstiloNomeado em near-misses INEQUÍVOCOS: Citacao e Citação (as formas que o LO NÃO emite, por descartar não-ASCII), Quote2, BlocoDeCitacao, citao em caixa baixa, e BlockQuote",
+      "esperado": "NENHUM é Citacao — cai no caminho de C3 ou em Paragrafo. A comparação é exata e sensível a caixa, como Title/Normal/Heading já são. Citacao e Citação como near-miss é deliberado e documenta a medição: são o que a intuição diria e o LO não emite",
       "verificacao": "V1"
     },
     {
       "id": "A4",
-      "contrato": "C2",
-      "cenario": "YAML sem as cinco chaves silentes, carregado por infra/ruleset.Carregar; e YAML com chave desconhecida; e YAML sem tamanho_pt",
-      "esperado": "o primeiro carrega com os cinco campos nil; o segundo é recusado por additionalProperties: false, que permanece; o terceiro é recusado porque tamanho_pt segue em required. Ausência de chave é o caminho que produz nil, não chave presente com valor nulo",
+      "contrato": "C3",
+      "cenario": "Parágrafo com RecuoEsquerdaTwips acima do limiar, nos estilos que NÃO bloqueiam: vazio, Normal e BodyText",
+      "esperado": "cdm.Citacao com a confiança própria de C3 nos três. O caso de Normal é o que importa: 47 dos 57 parágrafos do fixture real o usam, e com o portão da versão anterior o sinal nunca dispararia",
       "verificacao": "V1"
     },
     {
       "id": "A5",
       "contrato": "C3",
-      "cenario": "AplicarTipografia com fonte NIL sobre backend/testdata/artigo-desformatado.docx, que tem 57 w:rFonts (medido). SELEÇÃO OBRIGATÓRIA, medida pelo testador: alguns ordinais do fixture têm w:rPr com w:sz ANTES de w:i/w:b, violando a ordem de CT_RPr, e AplicarTipografia os recusa hoje E continua recusando com fonte nil, porque a guarda de ordem é estrutural e anterior ao laço por alvo. O teste seleciona os ordinais válidos e assere, como PRÉ-CONDIÇÃO, que os inválidos são recusados nos dois caminhos — a recusa de ordem NÃO afrouxa junto com A14",
-      "esperado": "w:sz e w:szCs gravados com o tamanho pedido, e os 57 w:rFonts PRESERVADOS byte a byte — nem sobrescritos nem removidos. O fixture artigo-real-libreoffice.docx NÃO serve aqui: ele tem ZERO w:rFonts (medido), então 'preservado' passaria trivialmente",
+      "cenario": "Recusas do recuo, um termo por caso: recuo EXATAMENTE no limiar; recuo abaixo; recuo zero; e recuo acima do limiar mas com estilo que determina outro papel (Title, Heading1, e um nome da lista de C2)",
+      "esperado": "não é Citacao por C3 em nenhum. No limiar exato NÃO classifica, fixando que a comparação é estrita. Nos de estilo, o papel do ESTILO vence — Titulo, Secao ou Citacao por C2, nunca Citacao por recuo",
       "verificacao": "V1"
     },
     {
       "id": "A6",
-      "contrato": "C3",
-      "cenario": "AplicarTipografia com fonte NIL sobre DOCX cujos runs NÃO têm w:rFonts algum",
-      "esperado": "nenhum w:rFonts é criado, e w:sz/w:szCs são gravados. Falha se a implementação inventar um rFonts vazio ou com família padrão (A versão anterior deste critério dizia 'fonte vazia', resquício de antes de C3 virar ponteiro — mesma classe da correção de C4.)",
+      "contrato": "C4",
+      "cenario": "Fallback.Aplicar com PoliticaConfianca default {LimiteConsulta 0.7, LimiteConfirmacao 0.7, LimiteAutomatico 0.95} sobre índice com um Citacao vindo de C3 e um vindo de C2",
+      "esperado": "o de C3 ENTRA no conjunto de candidatos e o de C2 NÃO. É o critério que prova que o desempate existe de verdade: sem ele, a faixa de confiança permitiria 0.8 e o bloco inferido sairia do fallback em silêncio",
       "verificacao": "V1"
     },
     {
       "id": "A7",
-      "contrato": "C3",
-      "cenario": "AplicarTipografia com fonte PRESENTE, repetindo os casos de recusa que já existem: tema concorrente em rFonts, homônimo sem namespace, texto em wrapper inline não suportado",
-      "esperado": "comportamento idêntico ao de hoje em todos — o caminho com fonte presente não pode ter regredido. É o controle que impede a mudança de C3 de afrouxar as recusas existentes",
+      "contrato": "C5",
+      "cenario": "AplicarHeuristica com região aberta por REFERÊNCIAS e, dentro dela, um bloco Citacao a confiancaEstiloConhecido, um Citacao com a confiança de C3, e um Paragrafo a confiancaSemEstilo",
+      "esperado": "os dois Citacao RESISTEM e mantêm papel e confiança; o Paragrafo é reclassificado para Referencia com confiancaRegiao. A regra é por CONFIANÇA, não por papel: palpite posicional não vence evidência no bloco CONFIRMADO como o comportamento certo na correção de C5: a regra passou a ter UM termo (Papel != Paragrafo), e é A7 que obriga isso — com o termo de confiança, o Citacao de 0.5 seria rebaixado e este critério falharia.",
       "verificacao": "V1"
     },
     {
       "id": "A8",
-      "contrato": "C4",
-      "cenario": "AplicarPlano com os cinco campos nil sobre backend/testdata/artigo-real-libreoffice.docx, que tem (medido) w:jc 58, w:spacing 57, w:before 57, w:after 57, w:ind 0 e w:rFonts 0",
-      "esperado": "w:sectPr com as margens do plano, e dentro de cada w:spacing alvo SOMENTE w:line e w:lineRule alterados: o w:pPr sai igual ao original EXCETO esses dois atributos, com w:before e w:after inalterados em valor. w:ind segue com contagem 0 antes e depois, e w:rFonts segue com contagem 0 antes e depois — 'nenhum rFonts CRIADO' é a asserção, porque é justamente o erro que C3 pode introduzir ao montar valores['rFonts'] com fonte vazia e gravar ascii=\"\". A versão anterior deste critério era IMPOSSÍVEL: pedia 'nenhum w:jc' num arquivo que tem 58 LIMITE medido: este critério NÃO detecta before escrito a zero, porque os 57 w:before de artigo-real-libreoffice.docx já valem 0, então gravar 0 é no-op nesse arquivo. Quem distingue é A13, em artigo-desformatado.docx, cujo w:before tem contagem 0.",
+      "contrato": "C5",
+      "cenario": "O caso PREEXISTENTE que a mesma regra conserta: Titulo a confiancaEstiloConhecido dentro de região aberta por RESUMO",
+      "esperado": "resiste e segue Titulo. Hoje é sobrescrito para Resumo a 0.6, porque ehCabecalho(Titulo) é falso — o defeito não é introduzido por este recorte, e a regra geral o conserta de lambuja",
       "verificacao": "V1"
     },
     {
       "id": "A9",
-      "contrato": "C4",
-      "cenario": "AplicarPlano com cada um dos cinco campos presente, um por vez, e os outros quatro nil",
-      "esperado": "exatamente o mutador correspondente roda e os outros quatro não, aferido por efeito observável no XML. Cinco casos, um termo cada. PRECISÃO medida pelo testador em mutação real: remover uma guarda NÃO quebra 'exatamente um caso' — quebra os quatro casos em que aquele campo é nil, que é a mesma força discriminante com granularidade por termo",
+      "contrato": "C5",
+      "cenario": "Propagação de região que deve CONTINUAR funcionando, incluindo o caso que a versão anterior deste critério ESCONDIA: blocos Paragrafo com confiancaSemEstilo (0.2) E blocos Paragrafo com confiancaEstiloConhecido (0.95) vindos de `Normal`, todos dentro de região aberta por RESUMO e por REFERÊNCIAS",
+      "esperado": "TODOS são reclassificados, inclusive os de 0.95 — Paragrafo é papel-default e palpite posicional o vence em qualquer confiança. A versão anterior exercitava só 0.2, o caso que passa de qualquer jeito, e por isso não teria pegado o bloqueante que as duas auditorias acharam Este critério NASCE VERDE, e isso é o ponto: ele é o FALSIFICADOR de um conserto errado de C5. O testador rodou os dois subcasos isolados e os dois passam hoje, inclusive o de Paragrafo@0.95.",
       "verificacao": "V1"
     },
     {
       "id": "A10",
-      "contrato": "C4",
-      "cenario": "AplicarPlano com TRÊS campos nil e DOIS presentes, sendo que o mutador de um dos presentes RECUSA por XML inválido",
-      "esperado": "atomicidade idêntica à de hoje: nenhuma parte substituída no receptor e Salvar em destino novo reproduz o original byte a byte. O cenário anterior era 'todos os cinco presentes', que não percorre NENHUMA guarda de nil e portanto não poderia falhar por causa de C4",
+      "contrato": "C2",
+      "cenario": "REGRESSÃO dos dois fixtures: pipeline ExtrairBlocos mais camada 1 mais AplicarHeuristica sobre artigo-real-libreoffice.docx e artigo-desformatado.docx",
+      "esperado": "os papéis produzidos são EXATAMENTE os de hoje e há ZERO Citacao. Medi que nenhum dos dois fixtures tem estilo de citação nem recuo à esquerda, então a feature é no-op neles — e isso é o que o critério afirma, em vez de uma contagem de 'blocos que mudam', que a auditoria mostrou ser vacuosa. A expectativa é compartilhada com analisar_estrutura_test.go, que entrou em arquivos por isso A arquitetura mediu os dois fixtures de forma independente e confirmou: 57 parágrafos cada, estilos {Title 1, Normal 47, Heading1 7, Heading2 2} e {Title 1, sem pStyle 47, ...}, ZERO w:ind e zero estilo de citação. A premissa de no-op confere. MEDIDO pelo testador antes do recorte: as DUAS fixtures produzem a MESMA sequência de papéis de expectativaFixtureReal40Blocos(), divergindo só nas confianças (0.95 de `Normal` contra 0.2 sem pStyle). Por isso analisar_estrutura_test.go NÃO precisou de ajuste e saiu de `arquivos`.",
       "verificacao": "V1"
     },
     {
       "id": "A11",
-      "contrato": "C5",
-      "cenario": "Carregar backend/rulesets/abnt-14724/v1.yaml por infra/ruleset.Carregar e validar",
-      "esperado": "carrega e valida; pagina 21,0 x 29,7 com margens 3/2/3/2; corpo.tamanho_pt 12 e corpo.entrelinha 1.5; e os cinco campos silentes NIL. Falha se qualquer um dos cinco vier preenchido — é o critério que impede alguém 'completar' o perfil com valor não normativo",
+      "contrato": "C1",
+      "cenario": "Pipeline sobre docxSintetico com um bloco de recuo alto e um com w:pStyle val=Quote, atravessando ExtrairBlocos, camada 1 e AplicarHeuristica",
+      "esperado": "os dois saem Citacao com as confianças respectivas de C3 e C2, provando o caminho completo. É o critério que substitui a parte útil da A10 vacuosa da versão anterior",
       "verificacao": "V1"
     },
     {
       "id": "A12",
-      "contrato": "C5",
-      "cenario": "Formatação ponta a ponta com o perfil abnt-14724 sobre artigo-real-libreoffice.docx, por Planejar mais AplicarPlano",
-      "esperado": "w:pgSz com w:w=11906 e w:h=16838 (21,0cm e 29,7cm por math.Round, vo/unidades.go:30-38); w:pgMar com 1701 nas margens de 3cm e 1134 nas de 2cm; w:spacing com line=360 e lineRule=auto; w:sz=24. E: w:ind contagem 0 antes e depois, w:rFonts contagem 0 antes e depois, w:before e w:after inalterados em valor, w:jc inalterado em valor. Números NOMEADOS: 'pgSz de A4' não é asserção e passaria com qualquer página",
+      "contrato": "C2",
+      "cenario": "Citacao atravessando cdm.NovoBloco, Indice.Validar, Indice.Serializar e cdm.Desserializar, e um CDM antigo SEM nenhum Citacao",
+      "esperado": "válido em todas as portas, round-trip preserva papel, confiança e origem, e o CDM antigo segue válido. Guarda barata de persistência — NÃO conta como cobertura de C2 ou C3, porque a serialização é agnóstica a papel (serializacao.go grava o nome como string) e citacao já está em papeisSemNivel",
       "verificacao": "V1"
     },
     {
       "id": "A13",
-      "contrato": "C4",
-      "cenario": "AplicarPlano em dois planos sobre artigo-desformatado.docx, que tem w:before contagem 0 (medido): um com EspacoAntesPT apontando para 0 e RecuoCM apontando para 0; outro com os dois nil",
-      "esperado": "no primeiro, w:before=\"0\" e w:ind/@w:firstLine=\"0\" são GRAVADOS explicitamente; no segundo, nenhum dos dois é criado e o w:pPr sai como o original. É aqui que ponteiro-para-0 e nil se tornam DISTINGUÍVEIS, e é este critério que sustenta a decisão de ponteiro de C1 — em Validar() os dois são indistinguíveis",
+      "contrato": "C3",
+      "cenario": "Caminho novo de classificação exercitado com documento cujo texto contenha uma marca única, com buffer de log ligado",
+      "esperado": "nenhuma marca em erro, log ou trace. ClassificarPorEstiloDocx não devolve erro e não loga hoje; o critério nasce verde e existe para derrubar quem acrescentar log de conteúdo depois. Ler estilo e recuo NÃO toca o texto do bloco, diferente da heurística de aspas que foi retirada",
       "verificacao": "V1"
     },
     {
       "id": "A14",
       "contrato": "C3",
-      "cenario": "AplicarTipografia com fonte NIL sobre pacote SINTÉTICO cujos runs têm w:rFonts com atributo de tema (w:asciiTheme) e, em caso separado, homônimo sem namespace (ascii= sem prefixo). Sintético e não artigo-desformatado.docx porque os 57 w:rFonts daquele fixture são todos `<w:rFonts w:ascii=\"Arial\" w:hAnsi=\"Arial\"/>`, sem tema e sem homônimo — medido pelo testador. Quem cobre a fixture real com 57 rFonts é A5",
-      "esperado": "ACEITO nos dois, e o w:rFonts sai byte a byte igual. Com fonte silente o nó não é alvo, logo validarAlvoTipografia não roda para ele: a recusa que existe no caminho com fonte PRESENTE deixa de valer, e isso é deliberado — não mutamos o nó, não há conflito a resolver. Sem este critério o afrouxamento seria indistinguível de regressão na reauditoria",
-      "verificacao": "V1"
+      "cenario": "Leitura dos comentários de limiarRecuoCitacaoTwips, da constante de confiança de C3 e da lista de C2",
+      "esperado": "o limiar é declarado como parâmetro de DETECÇÃO, com a nota de que a NBR 10520 não está disponível no projeto e que o valor não é requisito de norma; a confiança cita a dependência de LimiteConsulta; e a lista de C2 registra que foi MEDIDA com soffice, que o LO descarta caracteres não-ASCII do styleId, e que por isso a lista é frágil e o recuo é o caminho robusto. Não observável em teste; verificado na revisão do delta",
+      "verificacao": "V3"
     },
     {
       "id": "A15",
-      "contrato": "C1",
-      "cenario": "INTEGRAÇÃO: Semear o perfil abnt-14724 com os cinco campos nil e relê-lo por ConsultaRulesetRepo.ObterPorID, via gerente.RulesetsConsulta(), cuja assinatura é (ruleset.Definicao, ativo bool, error) — NÃO está em contracts.RulesetRepo, que só tem Semear; depois re-semear o MESMO v1",
-      "esperado": "o round-trip devolve os cinco campos nil, e o re-seed do mesmo v1 é idempotente, SEM ErroConflito. Prova que nil produz chave AUSENTE no jsonb e que o checksum e a comparação definicao=$4::jsonb da imutabilidade (data/postgres/ruleset.go:112-130) conferem — se a tag omitempty for esquecida, {\"fonte\":null} vira jsonb diferente e o re-seed quebra contra a versão imutável LIMITE medido pelo testador: o re-seed por si NÃO pega omitempty esquecido dentro do MESMO processo, porque os dois seeds marshalam igual; quem pega é a asserção de chave ausente no definicao::text. O ErroConflito só apareceria contra linha semeada por binário anterior. Os dois ficam.",
-      "verificacao": "V3"
+      "contrato": "C5",
+      "cenario": "O OUTRO ramo de rebaixamento, que C5 não cobre: bloco Citacao a confiancaEstiloConhecido cujo texto casa papelPorRegraTextual — por exemplo uma citação que começa com \"Fonte:\" e viraria Legenda a confiancaRegraTextual (0.8)",
+      "esperado": "decisão DECLARADA e fixada: regra textual (0.8) NÃO rebaixa Citacao de estilo nomeado (0.95), pelo mesmo princípio de C5 — evidência declarada pelo documento vence inferência. Sem este critério, C5 conserta só o ramo de região e deixa o de regra textual aberto, o que a auditoria apontou como BAIXO mas é o mesmo defeito",
+      "verificacao": "V1"
+    },
+    {
+      "id": "A16",
+      "contrato": "C4",
+      "cenario": "Delta de candidatos ao fallback, medido: índice de um documento SEM recuo e de um COM recuo à esquerda acima do limiar, contando quantos blocos entram no conjunto de candidatos de Fallback.Aplicar",
+      "esperado": "o documento com recuo tem MAIS candidatos, e o teste NOMEIA quantos. É o critério que torna visível um efeito que a spec anterior negava: hoje um parágrafo `Normal` fica em 0.95 e NUNCA é candidato, logo seu TextoResumo nunca atravessa a fronteira para o Jev; com C3, todo `Normal` recuado cai para 0.5 e passa a atravessar. Mitigado por Jev.Habilitado ser false por padrão, mas é mudança de QUAIS blocos saem, não de volume — o teto de 32 em fallback.go:95 é o mesmo",
+      "verificacao": "V1"
+    },
+    {
+      "id": "A17",
+      "contrato": "C6",
+      "cenario": "AplicarHeuristica sobre [Paragrafo \"RESUMO\", Titulo \"1 INTRODUÇÃO\"@0.95, Paragrafo \"texto corrido\"] — o rótulo abre região, o bloco do meio tem papel DETERMINADO que NÃO é cabeçalho (ehCabecalho(Titulo) é falso) e cujo TEXTO casa numeração de seção",
+      "esperado": "o Titulo sai intacto (papel Titulo, confiança 0.95, origem preservada) E o terceiro bloco sai Paragrafo, não Resumo: o termo 2 fechou a região. Falsifica a remoção do termo 2 — sem ele o terceiro bloco sai Resumo@0.6",
+      "verificacao": "V1"
+    },
+    {
+      "id": "A18",
+      "contrato": "C6",
+      "cenario": "AplicarHeuristica sobre [Paragrafo \"RESUMO\", Secao(1) \"Introdução\"@0.95 (papel do estilo nomeado, SEM numeração no texto), Paragrafo \"texto corrido\"]",
+      "esperado": "o terceiro bloco sai Paragrafo: o termo 1 fechou a região pelo papel, sem ajuda do texto. Falsifica a remoção do termo 1 — este é o caso que o texto NÃO resolve, porque \"Introdução\" não casa numeracaoDeSecao",
+      "verificacao": "V1"
+    },
+    {
+      "id": "A19",
+      "contrato": "C6",
+      "cenario": "AplicarHeuristica com região aberta por \"RESUMO\" e, no meio, um bloco que casa regra textual que NÃO é cabeçalho. TABELA DE DOIS CASOS, um por ramo de papelPorRegraTextual que não é cabeçalho: \"Tabela 1 — distribuição\" (legenda) e \"PALAVRAS-CHAVE: formatação, norma\" (palavras-chave)",
+      "esperado": "em cada caso o bloco do meio sai com o papel da regra textual @0.8 E o terceiro bloco sai Resumo@0.6: a região continua ABERTA, porque legenda e palavras-chave aparecem dentro da região sem encerrá-la. As duas pontas são aferidas de propósito — a primeira é pré-condição de que a regra textual foi alcançada, a segunda é o que falsifica a implementação errada. NASCEM VERDES: é blindagem contra uma implementação de C6 que trate 'casou alguma regra textual' como 'é cabeçalho', não prova do código de hoje. Dois casos em vez de um por rigor da regra 12: 'os dois ramos ficam certos juntos se o conserto for correto' é condicional sobre a implementação, não medição dela. LIMITE MEDIDO PELO VALIDADOR: este criterio NAO blinda o termo 2 de C6. O bloco do meio e Paragrafo, logo nunca alcanca a guarda de papel determinado; o que A19 cobre e o ehCabecalho do ramo textual preexistente. O mutante `ehCabecalho(bloco.Papel) || casou` passa por A19. Quem falsifica aquele mutante e A20",
+      "verificacao": "V1"
+    },
+    {
+      "id": "A20",
+      "contrato": "C6",
+      "cenario": "AplicarHeuristica sobre [Paragrafo \"RESUMO\", Citacao \"Tabela 1 — distribuição\"@0.95, Paragrafo \"texto corrido\"] — bloco de papel DETERMINADO (alcança a guarda) cujo TEXTO casa regra textual que NÃO é cabeçalho. Sonda do validador, verde no código real e vermelha no mutante",
+      "esperado": "o terceiro bloco sai Resumo@0.6: a região continua ABERTA, porque legenda não é cabeçalho. Falsifica o mutante `ehCabecalho(bloco.Papel) || casou`, que dá Paragrafo no terceiro bloco — e que passa por A19, A17 e A18 e pela suíte de cdm inteira. Este é o caso que de fato blinda o LIMITE DO TERMO 2 de C6",
+      "verificacao": "V1"
     }
   ],
   "verificacoes": [
     {
       "id": "V1",
-      "comando": "go test ./internal/domain/ruleset/... ./internal/infra/ruleset/... ./internal/infra/ooxml ./internal/domain/formatador -race -count=1",
+      "comando": "go test ./internal/infra/ooxml ./internal/domain/cdm -race -count=1",
       "diretorio": "backend",
       "responsavel": "testador",
       "estado": "passou",
-      "evidencia": "RED em 12/10/2026, dir backend: go test ./internal/domain/ruleset/... ./internal/infra/ruleset/... ./internal/infra/ooxml ./internal/domain/formatador -race -count=1 -> FAIL [build failed] em domain/ruleset, infra/ruleset e infra/ooxml, com erros do tipo 'cannot use apontar(\"Fonte Sintética\") (*string) as string value'. domain/formatador esta ok HOJE e vai quebrar por compilacao quando C1 entrar. RED por COMPILACAO em TODOS os 15 criterios: a troca de tipo de C1 derruba o build dos quatro pacotes de uma vez, e nao ha como ter RED por assercao antes dela. NENHUM criterio nasceu verde. gofmt vazio. DRY RUN em copia descartavel fora do repositorio, com implementacao jogavel de C1-C5 incluindo o YAML: focal ok nos quatro pacotes (ooxml 52.6s com -race) e integracao ok em 9.4s, e SEIS mutacoes provaram que os criterios mordem — gravar rFonts ascii=\"\" com fonte nil derruba A5, A6, A8, A12, A14 e quatro subcasos de A9; remover cada uma das quatro guardas de nil derruba o conjunto previsto; tirar omitempty derruba o teste de tags e A15. || GREEN em 15/10/2026: go test ./internal/domain/ruleset/... ./internal/infra/ruleset/... ./internal/infra/ooxml ./internal/domain/formatador -race -count=1 exit 0 (ruleset 1.056s, infra/ruleset 1.716s, ooxml 93.712s, formatador 1.027s). Os cinco arquivos de teste do recorte NAO foram tocados; os quatro quebrados pela troca de tipo (entrelinha_test, plano_test, ruleset_test, executor_test) receberam SO ajuste de tipo, com helper de ponteiro local nomeado apontarRuleset e apontarExecutor para nao colidir com o apontar do arquivo //go:build integration do mesmo pacote, e desreferencia no ponto de uso onde require.NotZero compararia ponteiro em vez de valor."
+      "evidencia": "RED em 15/10/2026, dir backend: go test ./internal/infra/ooxml ./internal/domain/cdm -race -count=1 -> ooxml FAIL [build failed] por RecuoEsquerdaTwips e limiarRecuoCitacaoTwips indefinidos; cdm FAIL com EXATAMENTE 4 testes, todos novos, nada preexistente quebrado. Diffs reais: A8 sai resumo@0.6 em vez de titulo@0.95; A15 sai legenda@0.8 em vez de citacao@0.95. CLASSIFICAÇÃO: RED proprio por compilacao em A1, A4, A5, A11; RED por assercao em A7 (dois subtestes), A8 e A15; NASCERAM VERDES A6, A9, A12 e A16. A2, A3, A10 e A13 estao vermelhos so por arrasto do build. O testador rodou go test -gcflags=-e para ver alem de 'too many errors' e confirmou que TODO erro de compilacao e um dos dois simbolos contratados — nenhum import morto nem erro escondido atras do limite. A1 tem 12 subcasos, um por termo, pinados pelo VALOR exato. gofmt vazio. || VERDE em 16/10/2026, dir backend, mesmo comando: ok internal/infra/ooxml (90.553s) e ok internal/domain/cdm (1.055s). O RED expos DOIS bloqueantes de spec que tres rodadas de auditoria nao viram: (a) A7 prometia que o Citacao vindo de recuo resiste a inferencia por regiao, mas C5 exigia tambem Confianca > confiancaRegiao, e C4 fixa a confianca do recuo em 0.5 contra confiancaRegiao 0.6 — logo 0.5 > 0.6 e falso e o bloco SERIA rebaixado; pior, esse termo nao tinha NENHUM caso que falsificasse sua remocao, violando a regra 12 dentro da propria spec. C5 foi reduzido a UM TERMO (Papel != Paragrafo). (b) A1 trazia, no esperado e numa assercao aplicada a TODOS os subcasos, a clausula 'nenhum caso acima do limiar', que e falsa por construcao: w:start=2268 e w:left=1134 estao acima de 567 de proposito e A11 DEPENDE de 2268 estar acima. A assercao de faixa foi removida pelo principal (assert.Equal por caso a subsume: saneamento devolvendo MaxInt ou negativo grande quebra o Equal) e a clausula foi corrigida no esperado de A1. || REABERTA em 16/10/2026: o fechamento trouxe achados que mudam produção (R1 do validador -> contrato C6, criterios A17 e A18; achado BAIXO da seguranca na precedencia de w:start -> subcaso novo em A1). A medicao verde acima vale para o codigo ANTERIOR a esses consertos e nao cobre A17, A18 nem o subcaso novo. || SEGUNDA RODADA, 16/10/2026, dir backend: RED real foi blocos_test.go:626 (esperado 2268, obtido 0, subcaso novo de A1) e heuristica_test.go:804 (papel do bloco 2 = resumo, esperado paragrafo, Confianca 0.6 — A17). Depois do conserto, go test ./internal/infra/ooxml ./internal/domain/cdm -race -count=1 -> ok ooxml 89.000s, ok cdm 1.050s. A17, A18, A19 (dois subcasos) e TestAplicarHeuristicaFixtureRealIdentificaEstruturaDoArtigo passam, este ultimo com os blocos 7, 10 e 36-39. HONESTIDADE DA EVIDENCIA, nas palavras do testador: o GREEN deste recorte se apoia em UM vermelho de dominio (A17) e um de ooxml (subcaso w:start invalido de A1); A18 e A19 nasceram verdes e sao blindagem contra regressao, nao ampliacao da prova do codigo atual. Cobertura focal de internal/domain/cdm em 94,6% e de STATEMENTS, nao de condicoes, e nao e a suite global. VIES DE PROCESSO, meu: rodei testador e codador em PARALELO, entao A19 foi medido contra a arvore JA CONSERTADA — e blindagem verificada contra o conserto correto, nao contra o buraco. Troquei rigor por paralelismo e nao registrei a troca na hora. || TERCEIRA RODADA, 16/10/2026, dir backend: A19 cai por MUTACAO. O validador provou, e o testador reproduziu com go test -overlay sobre copia mutante no scratchpad, que o mutante `ehCabecalho(bloco.Papel) || casou` deixa a suite de cdm inteira passando, A19 incluido, porque em A19 o bloco do meio e Paragrafo e nunca alcanca a guarda. A20 foi escrito e e o UNICO vermelho sob o mutante: 'A20: papel Citacao com texto de LEGENDA nao fecha a regiao' FAIL, bloco 2 papel inesperado. Verde contra o codigo real. Caminhos do OR com caso cada: termo 1 verdadeiro -> A18; termo 2 verdadeiro com termo 1 falso -> A17; ambos falsos -> A20 e A8; mutante `casou` -> A20. Focal final: ok ooxml 96.292s cobertura 90,6% de statements, ok cdm 1.061s cobertura 94,6% de statements. A18, A19 e A20 nasceram verdes e sao blindagem contra regressao, nao ampliacao da prova do codigo atual — com a diferenca de que A20 tem MORTE DE MUTANTE MEDIDA e A18/A19 nao. Cobertura e de statements, nao de condicoes, e nao e a suite global."
     },
     {
       "id": "V2",
@@ -219,15 +247,15 @@
       "diretorio": "backend",
       "responsavel": "principal",
       "estado": "passou",
-      "evidencia": "Fechamento 15/10/2026 21:52, dir backend: go build ./... && go vet ./... && go vet -tags=integration ./... && gofmt -l . PASS sem saida; golangci-lint run ./... 0 issues; go test ./... -race -count=1 exit 0, 34 pacotes, nenhum FAIL/panic/DATA RACE."
+      "evidencia": "Medido em 16/10/2026, dir backend, pelo principal: go build ./... && go vet ./... && go vet -tags=integration ./... && gofmt -l . -> sem saida, exit 0. golangci-lint run ./... -> '0 issues.'. go test ./... -race -count=1 -shuffle=on -> nenhuma linha FAIL e nenhum pacote fora de 'ok'/'no test files'; shuffle ligado de proposito porque este projeto JA teve teste que passava so pela ordem alfabetica dos arquivos. Escopo: suite GLOBAL do backend, nao o focal do recorte. Integracao NAO foi executada neste fechamento: go vet -tags=integration compila as tags mas nao roda testcontainers; o recorte nao toca data/postgres. || REEXECUTADO em 16/10/2026 apos os consertos de C6 e da precedencia de w:start, mesmos comandos e mesmo escopo: build/vet/vet-integration/gofmt exit 0 sem saida; golangci-lint '0 issues.'; go test ./... -race -count=1 -shuffle=on sem nenhuma linha FAIL e nenhum pacote fora de ok/no test files. A medicao anterior desta mesma V2 vale para o codigo ANTERIOR aos consertos e foi preservada acima. || TERCEIRA EXECUCAO, 16/10/2026, apos A20 e o subcaso negativo de A1 (so arquivos de teste mudaram nesta rodada): build/vet/vet-integration/gofmt exit 0 sem saida; golangci-lint '0 issues.'; go test ./... -race -count=1 -shuffle=on sem nenhuma linha FAIL."
     },
     {
       "id": "V3",
-      "comando": "env DOCKER_HOST=unix:///run/user/1000/podman/podman.sock MIGRACOES_REDE_CONTAINER=slirp4netns TESTCONTAINERS_RYUK_DISABLED=true go test ./internal/data/postgres ./internal/infra/fila -tags integration -race -count=1",
+      "comando": "revisão manual do delta pelo validador e pela segurança",
       "diretorio": "backend",
       "responsavel": "principal",
       "estado": "passou",
-      "evidencia": "EXECUTADA em 15/10/2026 com Podman: go test ./internal/data/postgres ./internal/infra/fila -tags integration -race -count=1 -> ok data/postgres 18.375s e ok infra/fila 18.394s, exit 0. A15 confirma que nil produz chave AUSENTE no jsonb e que o re-seed do mesmo v1 e idempotente."
+      "evidencia": "V3 é revisão HUMANA de comentário, não comando. Existe porque A14 afere texto de comentário e a auditoria apontou que apontá-lo para V2 (build, vet, gofmt, suíte) seria trilha de evidência FALSA: nenhum daqueles comandos lê comentário. || EXECUTADA em 16/10/2026. Validador: APROVA COM RESSALVA em duas rodadas; a segunda rodada usou sondas de MUTACAO e foi ela que derrubou A19 e confirmou, termo por termo, que A17 falsifica o termo 2 e A18 o termo 1. Seguranca: APROVA COM RESSALVA, sem achado critico ou alto, com dois BAIXO (w:ind herdado de caixa de texto; precedencia de w:start antes do saneamento, este consertado) e um MEDIO PREEXISTENTE fora do recorte (abrirDocumentoPrincipal sem io.LimitReader). Revisao de comentario (A14): o bloqueante B1 era um comentario que prometia um bloco de controle inexistente, e a frase 'A19 existe para pegar isso' no proprio contrato C6 era afirmacao sem prova — os dois corrigidos. Nenhum setimo comentario mentiroso na releitura final."
     }
   ],
   "pendencias": []

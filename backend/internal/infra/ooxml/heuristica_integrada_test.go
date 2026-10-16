@@ -144,3 +144,80 @@ func TestAplicarHeuristicaFixtureRealProduzBlocosValidosParaCDM(t *testing.T) {
 		assert.NoErrorf(t, err, "bloco %d devolvido pela camada 2 não passaria em cdm.NovoBloco", i)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Recorte f3-cdm-classifica-citacao — A10 (regressão pura)
+// ---------------------------------------------------------------------------
+
+// classificarFixture roda o pipeline completo (extrair -> camada 1 ->
+// camada 2) sobre a fixture informada. Generalização de
+// classificarFixtureReal, que continua existindo com o nome que os dois
+// testes da F2 já usam.
+func classificarFixture(t *testing.T, fixture string) []cdm.Bloco {
+	t.Helper()
+
+	dados := lerFixture(t, fixture)
+	doc, err := Abrir(bytes.NewReader(dados), int64(len(dados)))
+	require.NoError(t, err)
+
+	brutos, err := doc.ExtrairBlocos()
+	require.NoError(t, err)
+	require.Len(t, brutos, 40, "pré-condição: as duas fixtures têm 40 blocos de nível superior")
+
+	classificados := make([]cdm.Bloco, len(brutos))
+	for i, bruto := range brutos {
+		classificados[i] = ClassificarPorEstiloDocx(bruto)
+	}
+
+	saida, err := cdm.AplicarHeuristica(classificados)
+	require.NoError(t, err)
+	require.Len(t, saida, 40)
+
+	return saida
+}
+
+// TestClassificacaoDeCitacaoEhNoOpNasDuasFixtures é a regressão do recorte da
+// citação: os dois documentos de teste NÃO têm estilo de citação nem w:ind à
+// esquerda (medido: 57 parágrafos cada, zero w:ind, estilos {Title, Normal,
+// Heading1, Heading2} e {Title, sem pStyle, ...}), então a feature é no-op
+// neles.
+//
+// O critério é afirmado como "exatamente os papéis de hoje e ZERO Citacao",
+// e não como uma contagem de blocos que mudam — contagem passaria por
+// coincidência. A expectativa de papéis é a MESMA
+// expectativaFixtureReal40Blocos() nas duas fixtures: medi em 2026-10-15,
+// antes do recorte, e as duas produzem a mesma sequência de papéis (as
+// confianças divergem, porque uma usa "Normal" e a outra não tem w:pStyle).
+//
+// É também a rede do conserto de C5: se a regra de região for consertada
+// errado de novo — condicionando só à confiança —, os blocos 7, 10 e 36 a 39,
+// que chegam da camada 1 como Paragrafo a 0,95 por causa do estilo "Normal",
+// voltam a Paragrafo e este teste cai junto com
+// TestAplicarHeuristicaFixtureRealIdentificaEstruturaDoArtigo.
+func TestClassificacaoDeCitacaoEhNoOpNasDuasFixtures(t *testing.T) {
+	t.Parallel()
+
+	esperados := expectativaFixtureReal40Blocos()
+	require.Len(t, esperados, 40, "ficha de expectativa incompleta: precisa cobrir os 40 blocos")
+
+	for _, fixture := range []string{"artigo-real-libreoffice.docx", "artigo-desformatado.docx"} {
+		fixture := fixture
+		t.Run(fixture, func(t *testing.T) {
+			t.Parallel()
+
+			saida := classificarFixture(t, fixture)
+
+			for indice := 0; indice < 40; indice++ {
+				assert.Equalf(t, esperados[indice], saida[indice].Papel,
+					"bloco %d mudou de papel: a classificação de citação tem de ser no-op nesta fixture", indice)
+			}
+
+			for indice, bloco := range saida {
+				assert.NotEqualf(t, cdm.Citacao, bloco.Papel,
+					"bloco %d virou Citacao numa fixture que não tem estilo de citação nem recuo à esquerda", indice)
+				assert.NotEqualf(t, confiancaRecuoCitacaoEsperada, bloco.Confianca,
+					"bloco %d saiu com a confiança do sinal de recuo: o sinal disparou onde não há recuo algum", indice)
+			}
+		})
+	}
+}

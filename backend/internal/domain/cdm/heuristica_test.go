@@ -576,3 +576,320 @@ func TestAplicarHeuristicaConcordarComACamada1NaoEnfraqueceOBloco(t *testing.T) 
 	assert.Equal(t, Paragrafo, saida[3].Papel,
 		"não reescrever o cabeçalho não pode impedi-lo de encerrar a região do resumo")
 }
+
+// ---------------------------------------------------------------------------
+// Recorte f3-cdm-classifica-citacao — C5, critérios A7, A8, A9 e A15
+//
+// C5: a inferência por REGIÃO não rebaixa bloco cujo papel é DIFERENTE de
+// Paragrafo. Paragrafo é o papel-DEFAULT ("sem papel"): a camada 1 o devolve
+// tanto no fallback de estilo desconhecido (0,2) quanto no estilo CONHECIDO
+// "Normal" (0,95), e nos dois casos 0,95 é confiança de que LEMOS o estilo
+// certo, não de que o PAPEL está semanticamente determinado. Palpite
+// posicional tem de vencer o papel-default em qualquer confiança — é o que
+// A9 trava.
+// ---------------------------------------------------------------------------
+
+// confiancaRecuoCitacaoRef é a confiança do sinal de recuo da camada 1
+// (C3/C4 do recorte, valor fixo 0,5). Hardcoded e comentada aqui pelo mesmo
+// motivo de confiancaEntradaBaixa/Alta: o pacote cdm não importa ooxml.
+//
+// Posição relativa que importa para C5: 0,2 < 0,5 < confiancaRegiao (0,6) <
+// confiancaRegraTextual (0,8) < 0,95.
+const confiancaRecuoCitacaoRef = 0.5
+
+// A7 — região aberta por REFERÊNCIAS com dois Citacao dentro, e um Paragrafo
+// de controle que PRECISA ser reclassificado (sem ele o teste não provaria
+// que a região estava aberta de verdade).
+//
+// O subcaso do Citacao a 0,5 está separado de propósito: ele é o único ponto
+// do recorte em que o texto de A7 ("os dois Citacao RESISTEM") e o texto de
+// C5 ("papel diferente de Paragrafo E confiança MAIOR que confiancaRegiao")
+// não podem valer juntos, porque C4 fixa a confiança do recuo em 0,5 e
+// 0,5 > 0,6 é falso. Está escrito conforme o CRITÉRIO, que é o comportamento
+// observável prometido e o que o objetivo do recorte pede ("impedir que a
+// inferência por região apague essa classificação"). Lacuna comunicada ao
+// principal: a condição de confiança de C5 não tem, em nenhum dos 16
+// critérios, caso que falsifique sua remoção — o termo que todos os casos
+// exercitam é só `Papel != Paragrafo`.
+func TestAplicarHeuristicaRegiaoNaoRebaixaCitacaoDeEstiloNomeado(t *testing.T) {
+	t.Parallel()
+
+	entrada := []Bloco{
+		deveNovoBloco(Secao(1), "REFERÊNCIAS", confiancaEntradaAlta, OrigemEstiloDocx, 0),
+		deveNovoBloco(Citacao, "Trecho citado em bloco, com estilo nomeado de citação.", confiancaEntradaAlta, OrigemEstiloDocx, 1),
+		deveNovoBloco(Paragrafo, "SEVERINO, Antônio Joaquim. Metodologia do trabalho científico.", confiancaEntradaBaixa, OrigemEstiloDocx, 2),
+	}
+
+	saida, err := AplicarHeuristica(entrada)
+
+	require.NoError(t, err)
+	require.Len(t, saida, 3)
+	assertResultadoBloco(t, 1, entrada[1], saida[1], blocoEsperado{papel: Citacao})
+	assertResultadoBloco(t, 2, entrada[2], saida[2], blocoEsperado{papel: Referencia, reclassificado: true})
+}
+
+func TestAplicarHeuristicaRegiaoNaoRebaixaCitacaoVindaDoSinalDeRecuo(t *testing.T) {
+	t.Parallel()
+
+	entrada := []Bloco{
+		deveNovoBloco(Secao(1), "REFERÊNCIAS", confiancaEntradaAlta, OrigemEstiloDocx, 0),
+		deveNovoBloco(Citacao, "Trecho citado em bloco, detectado pelo recuo à esquerda.", confiancaRecuoCitacaoRef, OrigemEstiloDocx, 1),
+		deveNovoBloco(Paragrafo, "MARCONI, Marina de Andrade; LAKATOS, Eva Maria. Fundamentos.", confiancaEntradaBaixa, OrigemEstiloDocx, 2),
+	}
+
+	saida, err := AplicarHeuristica(entrada)
+
+	require.NoError(t, err)
+	require.Len(t, saida, 3)
+	assertResultadoBloco(t, 2, entrada[2], saida[2], blocoEsperado{papel: Referencia, reclassificado: true})
+	assertResultadoBloco(t, 1, entrada[1], saida[1], blocoEsperado{papel: Citacao})
+}
+
+// A8 — o caso PREEXISTENTE que a mesma regra conserta. ehCabecalho(Titulo) é
+// falso, então hoje um Titulo dentro de região aberta é sobrescrito para
+// Resumo a 0,6. O defeito não é introduzido por este recorte; a regra geral o
+// conserta de lambuja.
+func TestAplicarHeuristicaRegiaoNaoRebaixaTituloDeEstiloNomeado(t *testing.T) {
+	t.Parallel()
+
+	entrada := []Bloco{
+		deveNovoBloco(Paragrafo, "RESUMO", confiancaEntradaBaixa, OrigemEstiloDocx, 0),
+		deveNovoBloco(Titulo, "Um título que o estilo nomeado já identificou.", confiancaEntradaAlta, OrigemEstiloDocx, 1),
+		deveNovoBloco(Paragrafo, "Texto que continua dentro da região do resumo.", confiancaEntradaBaixa, OrigemEstiloDocx, 2),
+	}
+
+	saida, err := AplicarHeuristica(entrada)
+
+	require.NoError(t, err)
+	require.Len(t, saida, 3)
+	assertResultadoBloco(t, 1, entrada[1], saida[1], blocoEsperado{papel: Titulo})
+	assertResultadoBloco(t, 2, entrada[2], saida[2], blocoEsperado{papel: Resumo, reclassificado: true})
+}
+
+// A9 — a propagação de região que tem de CONTINUAR funcionando, incluindo o
+// caso que a versão anterior deste critério escondia: Paragrafo a 0,95,
+// vindo do estilo CONHECIDO "Normal".
+//
+// É o critério mais importante do recorte, e é o falsificador de um conserto
+// de C5 condicionado só à confiança: 47 dos 57 parágrafos de
+// artigo-real-libreoffice.docx usam "Normal", e os blocos 7, 10 e 36 a 39
+// daquela fixture chegam aqui exatamente assim — Paragrafo a 0,95 dentro de
+// região aberta — esperando Resumo e Referencia.
+func TestAplicarHeuristicaRegiaoReclassificaParagrafoEmQualquerConfianca(t *testing.T) {
+	t.Parallel()
+
+	casos := []struct {
+		nome      string
+		confianca float64
+	}{
+		{nome: "Paragrafo a confiancaSemEstilo (0,2): estilo ausente ou desconhecido", confianca: confiancaEntradaBaixa},
+		{nome: "Paragrafo a confiancaEstiloConhecido (0,95): estilo \"Normal\", 47 dos 57 parágrafos do fixture real", confianca: confiancaEntradaAlta},
+	}
+
+	for _, caso := range casos {
+		caso := caso
+		t.Run(caso.nome, func(t *testing.T) {
+			t.Parallel()
+
+			entrada := []Bloco{
+				deveNovoBloco(Paragrafo, "RESUMO", confiancaEntradaBaixa, OrigemEstiloDocx, 0),
+				deveNovoBloco(Paragrafo, "Este é o texto do resumo do artigo.", caso.confianca, OrigemEstiloDocx, 1),
+				deveNovoBloco(Secao(1), "REFERÊNCIAS", confiancaEntradaAlta, OrigemEstiloDocx, 2),
+				deveNovoBloco(Paragrafo, "SEVERINO, Antônio Joaquim. Metodologia do trabalho científico.", caso.confianca, OrigemEstiloDocx, 3),
+			}
+
+			saida, err := AplicarHeuristica(entrada)
+
+			require.NoError(t, err)
+			require.Len(t, saida, 4)
+
+			assertResultadoBloco(t, 1, entrada[1], saida[1], blocoEsperado{papel: Resumo, reclassificado: true})
+			assertResultadoBloco(t, 3, entrada[3], saida[3], blocoEsperado{papel: Referencia, reclassificado: true})
+			assert.Equal(t, confiancaRegiao, saida[1].Confianca,
+				"a inferência por região vence o papel-default e grava a confiança DELA, não a da camada 1")
+			assert.Equal(t, confiancaRegiao, saida[3].Confianca)
+		})
+	}
+}
+
+// A15 — o OUTRO ramo de rebaixamento, que C5 não cobre: a regra TEXTUAL.
+// Uma citação que começa com "Fonte:" casa papelPorRegraTextual e viraria
+// Legenda a confiancaRegraTextual (0,8). Decisão declarada: regra textual
+// (0,8) NÃO rebaixa Citacao de estilo nomeado (0,95), pelo mesmo princípio de
+// C5 — evidência declarada pelo documento vence inferência.
+//
+// A entrada tem um bloco só, sem região aberta: este teste cobre apenas o
+// não-rebaixamento. A delimitação de região por bloco de papel determinado é
+// coberta por A17 e A18, abaixo.
+func TestAplicarHeuristicaRegraTextualNaoRebaixaCitacaoDeEstiloNomeado(t *testing.T) {
+	t.Parallel()
+
+	entrada := []Bloco{
+		deveNovoBloco(Citacao, "Fonte: a citação começa com a palavra que a regra de legenda reconhece.", confiancaEntradaAlta, OrigemEstiloDocx, 0),
+	}
+
+	saida, err := AplicarHeuristica(entrada)
+
+	require.NoError(t, err)
+	require.Len(t, saida, 1)
+	assertResultadoBloco(t, 0, entrada[0], saida[0], blocoEsperado{papel: Citacao})
+	assert.Equal(t, confiancaEntradaAlta, saida[0].Confianca,
+		"inferência textual a 0,8 não pode derrubar a confiança de uma evidência declarada pelo documento a 0,95")
+}
+
+// A17 e A18 — C6: proteger o PAPEL de um bloco (C5) não desliga a
+// DELIMITAÇÃO dos vizinhos. A região aberta é encerrada por DOIS termos
+// independentes, e cada caso aqui falsifica a remoção de UM deles (regra 12):
+//
+//   - A17, termo TEXTUAL: o texto do bloco casa numeracaoDeSecao, qualquer que
+//     seja o papel dele. Papel Titulo, que ehCabecalho NÃO reconhece
+//     (heuristica.go:132), com texto "1 INTRODUÇÃO". Apagar o termo do texto
+//     deixa a região ABERTA e o vizinho seguinte sai Resumo a 0,6.
+//   - A18, termo de PAPEL: ehCabecalho(papel) é verdadeiro. Papel Secao(1)
+//     vindo do estilo nomeado, com texto "Introdução" SEM numeração — que é
+//     justamente o que o termo textual NÃO resolve. Apagar o termo de papel
+//     quebra só este caso.
+//   - A20, LIMITE do termo 2: o termo 2 é "o texto aponta CABEÇALHO", não "o
+//     texto casa alguma regra textual". Papel Citacao (determinado, logo
+//     ALCANÇA a guarda) com texto "Tabela 1 — distribuição", que casa a regra
+//     de legenda. A região continua ABERTA e o vizinho sai Resumo a 0,6.
+//     Mede o mutante `ehCabecalho(bloco.Papel) || casou`, que a suíte inteira
+//     deixava passar porque nenhum caso levava texto de legenda a um bloco de
+//     papel determinado — A19 não pega esse mutante, veja o comentário dele.
+//
+// O bloco do meio sai INTACTO nos dois casos: o que o texto afeta é
+// regiaoAberta, isto é a classificação dos VIZINHOS. Fechar região é
+// delimitação, não reclassificação — C5 continua valendo sobre o bloco.
+func TestAplicarHeuristicaPapelDeterminadoAindaEncerraRegiao(t *testing.T) {
+	t.Parallel()
+
+	casos := []struct {
+		nome          string
+		blocoMeio     Bloco
+		papelMeio     Papel
+		regiaoFechada bool
+		termoProva    string
+	}{
+		{
+			nome:          "A17: papel Titulo (não é cabeçalho) com texto de seção numerada fecha a região pelo TEXTO",
+			blocoMeio:     deveNovoBloco(Titulo, "1 INTRODUÇÃO", confiancaEntradaAlta, OrigemEstiloDocx, 1),
+			papelMeio:     Titulo,
+			regiaoFechada: true,
+			termoProva:    "termo 2 (o TEXTO do bloco aponta cabeçalho: casa numeracaoDeSecao)",
+		},
+		{
+			nome:          "A18: papel Secao(1) do estilo nomeado, texto sem numeração, fecha a região pelo PAPEL",
+			blocoMeio:     deveNovoBloco(Secao(1), "Introdução", confiancaEntradaAlta, OrigemEstiloDocx, 1),
+			papelMeio:     Secao(1),
+			regiaoFechada: true,
+			termoProva:    "termo 1 (ehCabecalho do papel do próprio bloco)",
+		},
+		{
+			nome:          "A20: papel Citacao com texto de LEGENDA não fecha a região: o termo 2 exige cabeçalho, não qualquer regra textual",
+			blocoMeio:     deveNovoBloco(Citacao, "Tabela 1 — distribuição", confiancaEntradaAlta, OrigemEstiloDocx, 1),
+			papelMeio:     Citacao,
+			regiaoFechada: false,
+			termoProva:    "o ehCabecalho sobre o papel que o TEXTO sugere (trocá-lo por `casou` fecha a região aqui)",
+		},
+	}
+
+	for _, caso := range casos {
+		caso := caso
+		t.Run(caso.nome, func(t *testing.T) {
+			t.Parallel()
+
+			require.NotEqual(t, Paragrafo, caso.blocoMeio.Papel,
+				"pré-condição do caso: o bloco do meio tem papel DETERMINADO, senão a guarda de C5 nem é alcançada")
+
+			entrada := []Bloco{
+				deveNovoBloco(Paragrafo, "RESUMO", confiancaEntradaBaixa, OrigemEstiloDocx, 0),
+				caso.blocoMeio,
+				deveNovoBloco(Paragrafo, "texto corrido depois do cabeçalho, fora do resumo.", confiancaEntradaBaixa, OrigemEstiloDocx, 2),
+			}
+
+			saida, err := AplicarHeuristica(entrada)
+
+			require.NoError(t, err)
+			require.Len(t, saida, 3)
+
+			// C5 continua valendo: o bloco do meio não é tocado.
+			assertResultadoBloco(t, 1, entrada[1], saida[1], blocoEsperado{papel: caso.papelMeio})
+			assert.Equal(t, confiancaEntradaAlta, saida[1].Confianca,
+				"fechar região não pode rebaixar a confiança do bloco que fechou")
+			assert.Equal(t, OrigemEstiloDocx, saida[1].Origem,
+				"fechar região não pode trocar a origem do bloco que fechou")
+
+			// A delimitação, que é o que cada caso de fato falsifica: o
+			// vizinho seguinte está FORA da região quando ela fechou, e
+			// DENTRO quando não fechou.
+			if caso.regiaoFechada {
+				assertResultadoBloco(t, 2, entrada[2], saida[2], blocoEsperado{papel: Paragrafo})
+				assert.NotEqual(t, Resumo, saida[2].Papel,
+					"sem o "+caso.termoProva+" a região fica aberta e este bloco sai Resumo a 0,6")
+				return
+			}
+
+			assertResultadoBloco(t, 2, entrada[2], saida[2], blocoEsperado{papel: Resumo, reclassificado: true})
+			assert.Equal(t, confiancaRegiao, saida[2].Confianca,
+				"a região segue aberta: sem "+caso.termoProva+" este bloco sairia Paragrafo")
+		})
+	}
+}
+
+// A19 — o ramo textual PREEXISTENTE: um bloco SEM papel determinado cujo
+// texto casa legenda ou palavras-chave é reclassificado pela regra textual e
+// NÃO encerra a região, porque o ehCabecalho de dentro do bloco textual
+// distingue "casou alguma regra" de "é cabeçalho".
+//
+// O QUE ESTE TESTE NÃO COBRE, medido por mutação pelo validador: o termo 2 da
+// guarda de papel determinado. O mutante `ehCabecalho(bloco.Papel) || casou`
+// deixa este teste VERDE, porque aqui o bloco do meio é Paragrafo e nunca
+// alcança aquela guarda. Quem mata esse mutante é A20, no teste acima. A
+// redação anterior deste comentário afirmava o contrário e era falsa.
+//
+// Um caso por RAMO não-cabeçalho de papelPorRegraTextual, e não um só com
+// argumento de simetria: se alguém tratar PalavrasChave como cabeçalho, a
+// cobertura de statements continua 100% e só o caso dele fica vermelho.
+func TestAplicarHeuristicaRegraTextualNaoCabecalhoNaoEncerraRegiao(t *testing.T) {
+	t.Parallel()
+
+	casos := []struct {
+		nome      string
+		textoMeio string
+		papelMeio Papel
+	}{
+		{nome: "legenda numerada dentro da região do resumo", textoMeio: "Tabela 1 — distribuição", papelMeio: Legenda},
+		{nome: "palavras-chave dentro da região do resumo", textoMeio: "Palavras-chave: formatação; ABNT", papelMeio: PalavrasChave},
+	}
+
+	for _, caso := range casos {
+		caso := caso
+		t.Run(caso.nome, func(t *testing.T) {
+			t.Parallel()
+
+			entrada := []Bloco{
+				deveNovoBloco(Paragrafo, "RESUMO", confiancaEntradaBaixa, OrigemEstiloDocx, 0),
+				deveNovoBloco(Paragrafo, caso.textoMeio, confiancaEntradaBaixa, OrigemEstiloDocx, 1),
+				deveNovoBloco(Paragrafo, "texto corrido", confiancaEntradaBaixa, OrigemEstiloDocx, 2),
+			}
+
+			require.Equal(t, Paragrafo, entrada[1].Papel,
+				"pré-condição: o bloco do meio chega SEM papel determinado, senão a regra textual nem é alcançada")
+
+			saida, err := AplicarHeuristica(entrada)
+
+			require.NoError(t, err)
+			require.Len(t, saida, 3)
+
+			// Primeira ponta: a regra textual foi de fato alcançada.
+			assertResultadoBloco(t, 1, entrada[1], saida[1], blocoEsperado{papel: caso.papelMeio, reclassificado: true})
+			assert.Equal(t, confiancaRegraTextual, saida[1].Confianca,
+				"o papel do bloco do meio vem da regra textual, não da região")
+
+			// Segunda ponta: é esta que falsifica o conserto errado de C6.
+			assertResultadoBloco(t, 2, entrada[2], saida[2], blocoEsperado{papel: Resumo, reclassificado: true})
+			assert.Equal(t, confiancaRegiao, saida[2].Confianca,
+				"a região do resumo continua ABERTA: nem legenda nem palavras-chave são cabeçalho")
+		})
+	}
+}
