@@ -35,7 +35,7 @@ func TestValidarEntrelinhaRejeitaMedidasInvalidasOuQueArredondamParaZero(t *test
 }
 
 func TestCorpoValidarPreservaErroAnteriorAoValidarEntrelinha(t *testing.T) {
-	corpo := Corpo{Fonte: "", TamanhoPT: 12, Entrelinha: 0, RecuoCM: 0, EspacoAntesPT: 0, EspacoDepoisPT: 0, Alinhamento: "esquerda"}
+	corpo := Corpo{Fonte: apontar(""), TamanhoPT: 12, Entrelinha: 0, RecuoCM: apontar(0.0), EspacoAntesPT: apontar(0.0), EspacoDepoisPT: apontar(0.0), Alinhamento: apontar("esquerda")}
 	err := corpo.validar()
 	require.Error(t, err)
 	var validacao *errors.ErroValidacao

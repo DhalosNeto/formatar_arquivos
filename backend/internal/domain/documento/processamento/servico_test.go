@@ -280,3 +280,87 @@ func TestServicoInternoPreservaFalhasTipadas(t *testing.T) {
 		}
 	}
 }
+
+// ---------------------------------------------------------------------------
+// A3 e A4 (C2) — IniciarFormatacao e ConcluirFormatacao no ServicoInterno.
+//
+// RED por COMPILAÇÃO enquanto os dois métodos não existem no ServicoInterno:
+// as transições da ENTIDADE já existem e nunca tiveram chamador.
+// ---------------------------------------------------------------------------
+
+func TestIniciarFormatacaoTransitaDeAnalisadoEDeFormatado(t *testing.T) {
+	t.Parallel()
+	for _, caso := range []struct {
+		nome     string
+		anterior entity.Status
+		aceita   bool
+	}{
+		{"de analisado", entity.StatusAnalisado, true},
+		// Aceitar formatado é deliberado: trocar de perfil não pode exigir
+		// reanálise (status.go:31-33).
+		{"de formatado", entity.StatusFormatado, true},
+		{"de recebido", entity.StatusRecebido, false},
+	} {
+		t.Run(caso.nome, func(t *testing.T) {
+			t.Parallel()
+			servico, repo, documento := novoCenario(t, caso.anterior)
+			obtido, err := servico.IniciarFormatacao(context.Background(), documento.ID)
+			if !caso.aceita {
+				var conflito *errors.ErroConflito
+				if !errors.Como(err, &conflito) {
+					t.Fatalf("esperava transição inválida de %s: %v", caso.anterior, err)
+				}
+				if repo.escritas != 0 || repo.documentos[documento.ID].Status != caso.anterior {
+					t.Fatalf("recusa alterou o status persistido: %s", repo.documentos[documento.ID].Status)
+				}
+				if !reflect.DeepEqual(obtido, entity.Documento{}) {
+					t.Fatal("recusa devolveu documento")
+				}
+				return
+			}
+			exigirSemErro(t, err)
+			if obtido.Status != entity.StatusFormatando || repo.documentos[documento.ID].Status != entity.StatusFormatando {
+				t.Fatalf("esperava formatando, obteve %s / %s", obtido.Status, repo.documentos[documento.ID].Status)
+			}
+			// CAS condicionado ao status anterior, como IniciarAnalise.
+			if repo.anterior != caso.anterior || repo.novo != entity.StatusFormatando || repo.escritas != 1 || repo.gravacoesCDM != 0 {
+				t.Fatal("transição não usou o status lido no CAS, ou escreveu CDM")
+			}
+		})
+	}
+}
+
+func TestConcluirFormatacaoSoSaiDeFormatando(t *testing.T) {
+	t.Parallel()
+	for _, caso := range []struct {
+		nome     string
+		anterior entity.Status
+		aceita   bool
+	}{
+		{"de formatando", entity.StatusFormatando, true},
+		{"de analisado", entity.StatusAnalisado, false},
+	} {
+		t.Run(caso.nome, func(t *testing.T) {
+			t.Parallel()
+			servico, repo, documento := novoCenario(t, caso.anterior)
+			obtido, err := servico.ConcluirFormatacao(context.Background(), documento.ID)
+			if !caso.aceita {
+				var conflito *errors.ErroConflito
+				if !errors.Como(err, &conflito) {
+					t.Fatalf("esperava transição inválida de %s: %v", caso.anterior, err)
+				}
+				if repo.escritas != 0 || repo.documentos[documento.ID].Status != caso.anterior {
+					t.Fatalf("recusa alterou o status persistido: %s", repo.documentos[documento.ID].Status)
+				}
+				return
+			}
+			exigirSemErro(t, err)
+			if obtido.Status != entity.StatusFormatado || repo.documentos[documento.ID].Status != entity.StatusFormatado {
+				t.Fatalf("esperava formatado, obteve %s / %s", obtido.Status, repo.documentos[documento.ID].Status)
+			}
+			if repo.anterior != entity.StatusFormatando || repo.novo != entity.StatusFormatado || repo.escritas != 1 {
+				t.Fatal("transição não usou o status lido no CAS")
+			}
+		})
+	}
+}

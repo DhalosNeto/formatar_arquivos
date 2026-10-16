@@ -29,6 +29,10 @@ import (
 // afirmar nada normativo (ABNT, APA e Geousp estão fora do recorte). Slug em
 // kebab-case, Versao >= 1, Nome preenchido e Fonte com URL http/https: sem
 // isso, Validar reprovaria antes do comportamento em teste.
+// apontar devolve o endereço de um literal: os cinco campos silentes de
+// ruleset.Corpo são ponteiro.
+func apontar[T any](valor T) *T { return &valor }
+
 func definicaoSintetica() ruleset.Definicao {
 	return ruleset.Definicao{
 		Slug:   "revista-sintetica",
@@ -41,13 +45,13 @@ func definicaoSintetica() ruleset.Definicao {
 			Margens:   ruleset.Margens{SuperiorCM: 2, InferiorCM: 2, EsquerdaCM: 3, DireitaCM: 2},
 		},
 		Corpo: ruleset.Corpo{
-			Fonte:          "Times New Roman",
+			Fonte:          apontar("Times New Roman"),
 			TamanhoPT:      12,
 			Entrelinha:     1.5,
-			RecuoCM:        1.25,
-			EspacoAntesPT:  0,
-			EspacoDepoisPT: 6,
-			Alinhamento:    "justificado",
+			RecuoCM:        apontar(1.25),
+			EspacoAntesPT:  apontar(0.0),
+			EspacoDepoisPT: apontar(6.0),
+			Alinhamento:    apontar("justificado"),
 		},
 	}
 }

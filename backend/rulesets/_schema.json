@@ -85,14 +85,10 @@
     "corpo": {
       "type": "object",
       "additionalProperties": false,
+      "description": "fonte, alinhamento, recuo_cm, espaco_antes_pt e espaco_depois_pt são OPCIONAIS: a ausência da chave significa que a norma é silente no campo e o documento é preservado. tamanho_pt e entrelinha seguem obrigatórios.",
       "required": [
-        "fonte",
         "tamanho_pt",
-        "entrelinha",
-        "recuo_cm",
-        "espaco_antes_pt",
-        "espaco_depois_pt",
-        "alinhamento"
+        "entrelinha"
       ],
       "properties": {
         "fonte": {

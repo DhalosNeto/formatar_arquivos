@@ -13,17 +13,26 @@
 // salvarSubstituicao, listarPartes, lerParte, lerFixture, extrairTextosWT,
 // paginaSintetica, conferirPaginaSinteticaXML e propriedadesTipografiaDireta
 // são os helpers já existentes do pacote.
+//
+// RECORTE f3-ruleset-campos-silentes: acrescenta A8, A9, A10, A12 e A13 (C4 e
+// C5) — os cinco campos opcionais de ruleset.Corpo como ponteiro, e o mutador
+// PULADO quando o campo é nil. Os casos herdados acima continuam valendo como
+// o caminho "perfil que diz tudo" (corpoPlanoSintetico).
 package ooxml
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/daniel-halos/formatador/internal/domain/cdm"
 	"github.com/daniel-halos/formatador/internal/domain/formatador"
 	"github.com/daniel-halos/formatador/internal/domain/ruleset"
 	"github.com/daniel-halos/formatador/internal/infra/errors"
+	infraruleset "github.com/daniel-halos/formatador/internal/infra/ruleset"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -45,15 +54,107 @@ const sectPrDiferenteDoPlano = `<w:sectPr><w:pgSz w:w="12240" w:h="15840"/><w:pg
 // sectPr do arquivo não os declara e MargensComplementares está zerada.
 var complementosZerados = map[string]string{"header": "0", "footer": "0", "gutter": "0"}
 
+// corpoPlanoSintetico tem os CINCO campos opcionais PRESENTES: é o perfil
+// institucional, que diz tudo. O perfil normativo silente é corpoSilente.
 func corpoPlanoSintetico() ruleset.Corpo {
 	return ruleset.Corpo{
-		Fonte:          "Times New Roman",
+		Fonte:          apontar("Times New Roman"),
 		TamanhoPT:      12,
 		Entrelinha:     1.5,
-		RecuoCM:        1.25,
-		EspacoAntesPT:  0,
-		EspacoDepoisPT: 6,
-		Alinhamento:    "justificado",
+		RecuoCM:        apontar(1.25),
+		EspacoAntesPT:  apontar(0.0),
+		EspacoDepoisPT: apontar(6.0),
+		Alinhamento:    apontar("justificado"),
+	}
+}
+
+// corpoSilente é o corpo de um perfil que declara SÓ o que a norma define:
+// tamanho (§5.1) e entrelinha (§5.2). Os cinco demais são nil — "a norma não
+// diz, preserve o documento" (C1/C4).
+func corpoSilente() ruleset.Corpo {
+	return ruleset.Corpo{TamanhoPT: 12, Entrelinha: 1.5}
+}
+
+func planoSilencioso(referencias []int) formatador.Plano {
+	return formatador.Plano{Pagina: paginaSintetica(), Corpo: corpoSilente(), ReferenciasCorpo: referencias}
+}
+
+// locaisDoPPr devolve os nomes locais dos filhos do w:pPr, na ordem do
+// documento. É como se afere que um mutador PULADO não deixou rastro.
+func locaisDoPPr(propriedades []propriedadeParagrafo) []string {
+	locais := make([]string, 0, len(propriedades))
+	for _, propriedade := range propriedades {
+		locais = append(locais, propriedade.local)
+	}
+	return locais
+}
+
+// secaoUnica devolve os atributos do namespace w de um filho do único
+// w:sectPr do corpo. Diferente de conferirPaginaSinteticaXML, aqui os números
+// esperados são NOMEADOS pelo caso (A12).
+func secaoUnica(t *testing.T, documentoXML []byte, local string) map[string]string {
+	t.Helper()
+
+	corpo, err := corpoXMLParagrafos(documentoXML)
+	require.NoError(t, err)
+	secoes := filhosW(corpo, "sectPr")
+	require.Len(t, secoes, 1, "a fixture precisa ter exatamente um w:sectPr corrente")
+	nos := filhosW(secoes[0], local)
+	require.Len(t, nos, 1, "o w:sectPr precisa ter exatamente um w:%s", local)
+
+	atributos := map[string]string{}
+	for _, atributo := range nos[0].atributos {
+		if atributo.namespace == namespaceWord {
+			atributos[atributo.local] = atributo.valor
+		}
+	}
+	return atributos
+}
+
+// propriedadesPorOrdinal indexa os filhos do w:pPr de cada ordinal informado.
+func propriedadesPorOrdinal(t *testing.T, documentoXML []byte, ordinais []int) map[int][]propriedadeParagrafo {
+	t.Helper()
+
+	indexadas := make(map[int][]propriedadeParagrafo, len(ordinais))
+	for _, ordinal := range ordinais {
+		indexadas[ordinal] = propriedadesDoParagrafo(t, documentoXML, ordinal)
+	}
+	return indexadas
+}
+
+// conferirSomenteEntrelinhaMudouNoPPr exige que, em cada ordinal, o w:pPr saia
+// IGUAL ao original exceto w:line e w:lineRule dentro de w:spacing. w:before,
+// w:after, w:jc e qualquer outro filho ficam inalterados em valor.
+func conferirSomenteEntrelinhaMudouNoPPr(t *testing.T, antes, depois map[int][]propriedadeParagrafo) {
+	t.Helper()
+
+	require.Equal(t, len(antes), len(depois))
+	for ordinal, originais := range antes {
+		novas := depois[ordinal]
+		require.Equal(t, locaisDoPPr(originais), locaisDoPPr(novas),
+			"os filhos do w:pPr do parágrafo %d não podem aparecer nem desaparecer", ordinal)
+		for indice, original := range originais {
+			esperados := map[string]string{}
+			for chave, valor := range original.atributos {
+				esperados[chave] = valor
+			}
+			if original.local == "spacing" {
+				delete(esperados, "line")
+				delete(esperados, "lineRule")
+			}
+			obtidos := map[string]string{}
+			for chave, valor := range novas[indice].atributos {
+				obtidos[chave] = valor
+			}
+			if original.local == "spacing" {
+				assert.Equal(t, "360", novas[indice].atributos["line"], "entrelinha 1,5 no parágrafo %d", ordinal)
+				assert.Equal(t, "auto", novas[indice].atributos["lineRule"], "lineRule no parágrafo %d", ordinal)
+				delete(obtidos, "line")
+				delete(obtidos, "lineRule")
+			}
+			assert.Equal(t, esperados, obtidos,
+				"parágrafo %d: w:%s só pode diferir em w:line e w:lineRule", ordinal, original.local)
+		}
 	}
 }
 
@@ -495,4 +596,292 @@ func definicaoDoPlanoSintetico() ruleset.Definicao {
 		Pagina: paginaSintetica(),
 		Corpo:  corpoPlanoSintetico(),
 	}
+}
+
+// ---------------------------------------------------------------------------
+// A8 — cinco campos nil sobre o pacote real: só página e entrelinha mudam
+//
+// Medido em artigo-real-libreoffice.docx: w:jc 58, w:spacing 57, w:before 57,
+// w:after 57, w:ind 0, w:rFonts 0. Por isso a asserção NÃO é "nenhum w:jc" —
+// o arquivo tem 58 — e sim "o w:pPr sai igual EXCETO w:line e w:lineRule".
+// ---------------------------------------------------------------------------
+
+func TestAplicarPlanoComCamposSilentesSoAplicaPaginaETipografiaDeTamanho(t *testing.T) {
+	original := lerFixture(t, "artigo-real-libreoffice.docx")
+	documentoOriginal := lerParte(t, original, "word/document.xml")
+
+	require.Empty(t, tagsRFonts(documentoOriginal), "pré-condição medida: a fixture tem ZERO w:rFonts")
+	require.NotContains(t, string(documentoOriginal), `w:left="1701"`,
+		"pré-condição: a página do plano DIFERE da medida do arquivo")
+
+	doc := abrirParaSubstituicao(t, original)
+	_, referencias := referenciasDeParagrafoDoPacoteReal(t, doc)
+	antes := propriedadesPorOrdinal(t, documentoOriginal, referencias)
+
+	require.NoError(t, doc.AplicarPlano(planoSilencioso(referencias), MargensComplementares{}))
+	saida := salvarSubstituicao(t, doc)
+	documentoNovo := lerParte(t, saida, "word/document.xml")
+	require.NotEqual(t, documentoOriginal, documentoNovo, "pré-condição: o caso precisa produzir delta")
+
+	// Página do plano aplicada.
+	conferirPaginaSinteticaXML(t, documentoNovo, nil)
+
+	// Nos parágrafos alvo, só a entrelinha muda.
+	conferirSomenteEntrelinhaMudouNoPPr(t, antes, propriedadesPorOrdinal(t, documentoNovo, referencias))
+
+	// Nenhum w:ind criado: RecuoCM nil não chama AplicarRecuoPrimeiraLinha.
+	require.Equal(t, 0, strings.Count(string(documentoOriginal), "<w:ind"), "pré-condição medida: w:ind 0 antes")
+	assert.Equal(t, 0, strings.Count(string(documentoNovo), "<w:ind"), "A8: w:ind segue com contagem 0 depois")
+
+	// Nenhum w:rFonts CRIADO: é o erro que C3 pode introduzir ao montar
+	// valores["rFonts"] com fonte vazia e gravar ascii="".
+	assert.Empty(t, tagsRFonts(documentoNovo), "A8: w:rFonts segue com contagem 0 depois")
+
+	// O tamanho é normativo e continua sendo gravado.
+	blocos := xmlDosBlocosDeTopo(t, documentoNovo)
+	for _, ordinal := range referencias {
+		assert.Contains(t, blocos[ordinal], `<w:sz w:val="24"/>`, "A8: w:sz no parágrafo %d", ordinal)
+	}
+
+	assert.Equal(t, extrairTextosWT(t, documentoOriginal), extrairTextosWT(t, documentoNovo))
+	for _, nome := range listarPartes(t, original) {
+		if nome != "word/document.xml" {
+			assert.Equal(t, lerParte(t, original, nome), lerParte(t, saida, nome), "parte não alvo %s", nome)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// A9 — cada campo presente, um por vez, com os outros quatro nil
+//
+// Cinco casos, um TERMO cada: remover qualquer uma das cinco guardas de nil
+// quebra exatamente um caso.
+// ---------------------------------------------------------------------------
+
+func TestAplicarPlanoRodaSomenteOMutadorDoCampoPresente(t *testing.T) {
+	casos := []struct {
+		nome     string
+		definir  func(*ruleset.Corpo)
+		conferir func(t *testing.T, documentoXML []byte, propriedades []propriedadeParagrafo)
+	}{
+		{"fonte", func(c *ruleset.Corpo) { c.Fonte = apontar("Times New Roman") },
+			func(t *testing.T, documentoXML []byte, propriedades []propriedadeParagrafo) {
+				tipografia := propriedadesTipografiaDireta(t, documentoXML)
+				require.Len(t, tipografia, 1, "A9: só o run do parágrafo alvo ganha rPr direto")
+				assert.Equal(t, map[string]string{
+					"rFonts.ascii": "Times New Roman", "rFonts.hAnsi": "Times New Roman",
+					"rFonts.eastAsia": "Times New Roman", "rFonts.cs": "Times New Roman",
+					"sz.val": "24", "szCs.val": "24",
+				}, tipografia[0], "A9: o mutador de tipografia rodou com família")
+				require.Len(t, tagsRFonts(documentoXML), 1, "A9: um único w:rFonts no documento")
+				assert.Equal(t, []string{"spacing"}, locaisDoPPr(propriedades))
+			}},
+		{"alinhamento", func(c *ruleset.Corpo) { c.Alinhamento = apontar("justificado") },
+			func(t *testing.T, documentoXML []byte, propriedades []propriedadeParagrafo) {
+				assert.Equal(t, "both", unicaPropriedade(t, propriedades, "jc")["val"])
+				assert.ElementsMatch(t, []string{"spacing", "jc"}, locaisDoPPr(propriedades))
+			}},
+		{"recuo", func(c *ruleset.Corpo) { c.RecuoCM = apontar(1.25) },
+			func(t *testing.T, documentoXML []byte, propriedades []propriedadeParagrafo) {
+				assert.Equal(t, "709", unicaPropriedade(t, propriedades, "ind")["firstLine"])
+				assert.ElementsMatch(t, []string{"spacing", "ind"}, locaisDoPPr(propriedades))
+			}},
+		{"espaco antes", func(c *ruleset.Corpo) { c.EspacoAntesPT = apontar(6.0) },
+			func(t *testing.T, documentoXML []byte, propriedades []propriedadeParagrafo) {
+				espacamento := unicaPropriedade(t, propriedades, "spacing")
+				assert.Equal(t, "120", espacamento["before"])
+				assert.NotContains(t, espacamento, "after", "A9: EspacoDepoisPT nil não grava w:after")
+				assert.Equal(t, []string{"spacing"}, locaisDoPPr(propriedades))
+			}},
+		{"espaco depois", func(c *ruleset.Corpo) { c.EspacoDepoisPT = apontar(6.0) },
+			func(t *testing.T, documentoXML []byte, propriedades []propriedadeParagrafo) {
+				espacamento := unicaPropriedade(t, propriedades, "spacing")
+				assert.Equal(t, "120", espacamento["after"])
+				assert.NotContains(t, espacamento, "before", "A9: EspacoAntesPT nil não grava w:before")
+				assert.Equal(t, []string{"spacing"}, locaisDoPPr(propriedades))
+			}},
+	}
+	for _, caso := range casos {
+		t.Run(caso.nome, func(t *testing.T) {
+			plano := planoSilencioso([]int{1})
+			caso.definir(&plano.Corpo)
+
+			fonte := fixtureQuatroParagrafos()
+			require.NotContains(t, string(fonte), "<w:pPr>", "pré-condição: os parágrafos da fixture não têm w:pPr")
+
+			doc := abrirParaSubstituicao(t, docxSintetico(t, fonte))
+			require.NoError(t, doc.AplicarPlano(plano, MargensComplementares{}))
+			documentoNovo := lerParte(t, salvarSubstituicao(t, doc), "word/document.xml")
+
+			propriedades := propriedadesDoParagrafo(t, documentoNovo, 1)
+			// Entrelinha é normativa e roda sempre.
+			espacamento := unicaPropriedade(t, propriedades, "spacing")
+			assert.Equal(t, "360", espacamento["line"])
+			assert.Equal(t, "auto", espacamento["lineRule"])
+			// Tamanho é normativo e roda sempre; família só com Fonte presente.
+			assert.Contains(t, string(documentoNovo), `<w:sz w:val="24"/>`)
+			if caso.nome != "fonte" {
+				assert.Empty(t, tagsRFonts(documentoNovo), "A9: Fonte nil não cria w:rFonts")
+			}
+			caso.conferir(t, documentoNovo, propriedades)
+
+			assert.Equal(t, `<w:p><w:r><w:t>zero</w:t></w:r></w:p>`, xmlDosBlocosDeTopo(t, documentoNovo)[0],
+				"A9: parágrafo fora da seleção não é tocado")
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// A10 — três campos nil e dois presentes, um deles recusando por XML inválido
+//
+// "Todos os cinco presentes" não percorreria NENHUMA guarda de nil e portanto
+// não poderia falhar por causa de C4.
+// ---------------------------------------------------------------------------
+
+func TestAplicarPlanoComCamposNilMantemAtomicidadeNaRecusa(t *testing.T) {
+	pacote := docxSintetico(t, fixtureComNumPr("um"))
+	require.Equal(t, pacote, salvarSubstituicao(t, abrirParaSubstituicao(t, pacote)),
+		"pré-condição: sem delta algum, Salvar reproduz o pacote byte a byte")
+
+	isolado := abrirParaSubstituicao(t, pacote)
+	require.NoError(t, isolado.AplicarPagina(paginaSintetica(), MargensComplementares{}))
+	require.NotEqual(t, pacote, salvarSubstituicao(t, isolado),
+		"pré-condição: a página do plano produz delta nesta fixture")
+
+	plano := planoSilencioso([]int{1})
+	// DOIS presentes: o alinhamento aplica, o recuo RECUSA (w:numPr no alvo).
+	plano.Corpo.Alinhamento = apontar("justificado")
+	plano.Corpo.RecuoCM = apontar(1.25)
+	require.Nil(t, plano.Corpo.Fonte, "pré-condição: três campos seguem nil")
+	require.Nil(t, plano.Corpo.EspacoAntesPT)
+	require.Nil(t, plano.Corpo.EspacoDepoisPT)
+
+	doc := abrirParaSubstituicao(t, pacote)
+	err := doc.AplicarPlano(plano, MargensComplementares{})
+
+	var validacao *errors.ErroValidacao
+	require.Error(t, err, "A10: o recuo precisa alcançar a guarda de w:numPr")
+	require.True(t, errors.Como(err, &validacao), "A10: a recusa é *ErroValidacao; erro foi %T", err)
+	assert.Equal(t, pacote, salvarSubstituicao(t, doc),
+		"A10: nenhuma parte substituída no receptor; Salvar em destino novo reproduz o original byte a byte")
+}
+
+// ---------------------------------------------------------------------------
+// A12 — ponta a ponta com o perfil abnt-14724, por Planejar + AplicarPlano
+//
+// Os números são NOMEADOS: "pgSz de A4" não é asserção e passaria com
+// qualquer página.
+// ---------------------------------------------------------------------------
+
+func definicaoABNT14724(t *testing.T) ruleset.Definicao {
+	t.Helper()
+
+	caminho := filepath.Join("..", "..", "..", "rulesets", "abnt-14724", "v1.yaml")
+	conteudo, err := os.ReadFile(caminho)
+	require.NoError(t, err, "A12: o perfil %s precisa existir", caminho)
+
+	definicao, err := infraruleset.Carregar(conteudo)
+	require.NoError(t, err, "A12: o perfil normativo precisa carregar")
+	require.Nil(t, definicao.Corpo.Fonte, "pré-condição: o perfil normativo é silente em fonte")
+	require.Nil(t, definicao.Corpo.Alinhamento)
+	require.Nil(t, definicao.Corpo.RecuoCM)
+	require.Nil(t, definicao.Corpo.EspacoAntesPT)
+	require.Nil(t, definicao.Corpo.EspacoDepoisPT)
+	return definicao
+}
+
+func TestAplicarPlanoComPerfilABNT14724NoPacoteReal(t *testing.T) {
+	original := lerFixture(t, "artigo-real-libreoffice.docx")
+	documentoOriginal := lerParte(t, original, "word/document.xml")
+	require.NotContains(t, string(documentoOriginal), `w:left="1701"`,
+		"pré-condição: a página do perfil DIFERE da medida do arquivo")
+
+	doc := abrirParaSubstituicao(t, original)
+	indice, referencias := referenciasDeParagrafoDoPacoteReal(t, doc)
+	require.NoError(t, indice.Validar())
+	antes := propriedadesPorOrdinal(t, documentoOriginal, referencias)
+
+	plano, err := formatador.Planejar(indice, definicaoABNT14724(t))
+	require.NoError(t, err)
+	require.Equal(t, referencias, plano.ReferenciasCorpo)
+
+	require.NoError(t, doc.AplicarPlano(plano, MargensComplementares{}))
+	documentoNovo := lerParte(t, salvarSubstituicao(t, doc), "word/document.xml")
+
+	// §5.1 — A4 e margens do anverso, em twips por math.Round.
+	assert.Equal(t, "11906", secaoUnica(t, documentoNovo, "pgSz")["w"], "A12: 21,0 cm em twips")
+	assert.Equal(t, "16838", secaoUnica(t, documentoNovo, "pgSz")["h"], "A12: 29,7 cm em twips")
+	margens := secaoUnica(t, documentoNovo, "pgMar")
+	assert.Equal(t, "1701", margens["top"], "A12: 3 cm")
+	assert.Equal(t, "1701", margens["left"], "A12: 3 cm")
+	assert.Equal(t, "1134", margens["bottom"], "A12: 2 cm")
+	assert.Equal(t, "1134", margens["right"], "A12: 2 cm")
+
+	// §5.2 — entrelinha 1,5; §5.1 — corpo 12 em meios-pontos.
+	blocos := xmlDosBlocosDeTopo(t, documentoNovo)
+	for _, ordinal := range referencias {
+		espacamento := unicaPropriedade(t, propriedadesDoParagrafo(t, documentoNovo, ordinal), "spacing")
+		assert.Equal(t, "360", espacamento["line"])
+		assert.Equal(t, "auto", espacamento["lineRule"])
+		assert.Contains(t, blocos[ordinal], `<w:sz w:val="24"/>`, "A12: w:sz no parágrafo %d", ordinal)
+	}
+
+	// O que a norma NÃO diz continua como estava.
+	assert.Equal(t, 0, strings.Count(string(documentoNovo), "<w:ind"), "A12: w:ind contagem 0 antes e depois")
+	assert.Empty(t, tagsRFonts(documentoNovo), "A12: w:rFonts contagem 0 antes e depois")
+	conferirSomenteEntrelinhaMudouNoPPr(t, antes, propriedadesPorOrdinal(t, documentoNovo, referencias))
+
+	assert.Equal(t, extrairTextosWT(t, documentoOriginal), extrairTextosWT(t, documentoNovo))
+}
+
+// ---------------------------------------------------------------------------
+// A13 — ponteiro-para-0 versus nil, no XML
+//
+// artigo-desformatado.docx tem w:before contagem 0 (medido): é o que torna
+// visível a gravação de before="0" explícito. É aqui que ponteiro-para-0 e nil
+// se tornam DISTINGUÍVEIS — em Validar() os dois devolvem nil (A2).
+// ---------------------------------------------------------------------------
+
+func TestAplicarPlanoDistingueZeroExplicitoDeCampoSilente(t *testing.T) {
+	original := lerFixture(t, "artigo-desformatado.docx")
+	documentoOriginal := lerParte(t, original, "word/document.xml")
+
+	require.Equal(t, 0, strings.Count(string(documentoOriginal), "w:before="),
+		"pré-condição medida: a fixture não tem w:before")
+	require.Equal(t, 0, strings.Count(string(documentoOriginal), "<w:ind"),
+		"pré-condição medida: a fixture não tem w:ind")
+
+	referencias := referenciasDeParagrafoDaFixture(t, original, ordinaisDesformatadoComRPrForaDeOrdem)
+	antes := propriedadesPorOrdinal(t, documentoOriginal, referencias)
+
+	t.Run("ponteiro para zero grava o zero", func(t *testing.T) {
+		plano := planoSilencioso(referencias)
+		plano.Corpo.EspacoAntesPT = apontar(0.0)
+		plano.Corpo.RecuoCM = apontar(0.0)
+
+		doc := abrirParaSubstituicao(t, original)
+		require.NoError(t, doc.AplicarPlano(plano, MargensComplementares{}))
+		documentoNovo := lerParte(t, salvarSubstituicao(t, doc), "word/document.xml")
+
+		for _, ordinal := range referencias {
+			propriedades := propriedadesDoParagrafo(t, documentoNovo, ordinal)
+			assert.Equal(t, "0", unicaPropriedade(t, propriedades, "spacing")["before"],
+				"A13: w:before=\"0\" é GRAVADO no parágrafo %d", ordinal)
+			assert.Equal(t, "0", unicaPropriedade(t, propriedades, "ind")["firstLine"],
+				"A13: w:ind/@w:firstLine=\"0\" é GRAVADO no parágrafo %d", ordinal)
+		}
+	})
+
+	t.Run("nil nao cria nenhum dos dois", func(t *testing.T) {
+		doc := abrirParaSubstituicao(t, original)
+		require.NoError(t, doc.AplicarPlano(planoSilencioso(referencias), MargensComplementares{}))
+		documentoNovo := lerParte(t, salvarSubstituicao(t, doc), "word/document.xml")
+
+		require.NotEqual(t, documentoOriginal, documentoNovo, "pré-condição: o caso precisa produzir delta")
+		assert.Equal(t, 0, strings.Count(string(documentoNovo), "w:before="),
+			"A13: com EspacoAntesPT nil nenhum w:before é criado")
+		assert.Equal(t, 0, strings.Count(string(documentoNovo), "<w:ind"),
+			"A13: com RecuoCM nil nenhum w:ind é criado")
+		conferirSomenteEntrelinhaMudouNoPPr(t, antes, propriedadesPorOrdinal(t, documentoNovo, referencias))
+	})
 }

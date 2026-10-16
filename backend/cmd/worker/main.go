@@ -84,7 +84,7 @@ func executar() error {
 	if err != nil {
 		return err
 	}
-	executor, err := fila.NovoExecutorDocumento(documentosInternos, clienteStorage, conversor, registrador, fallback)
+	executor, err := fila.NovoExecutorDocumento(documentosInternos, clienteStorage, conversor, gerenciador.RulesetsConsulta(), registrador, fallback)
 	if err != nil {
 		return err
 	}

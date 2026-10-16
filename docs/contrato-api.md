@@ -186,6 +186,82 @@ O documento também expõe o `status`: `recebido` → `analisando` →
 
 **404** se o documento não existe ou é de outro dono.
 
+### `POST /v1/documentos/{id}/formatar`
+
+Dispara a formatação com um perfil escolhido. **Assíncrona**: responde **202**
+com o job, não com o resultado.
+
+Corpo, `Content-Type: application/json`, no máximo 256 bytes:
+```json
+{ "ruleset_id": "0b7f1f6e-5c4a-4f7b-9f1e-2c3d4e5f6a7b" }
+```
+
+Chamar duas vezes com o **mesmo** `ruleset_id` devolve o **mesmo** job. Com
+`ruleset_id` **diferente** cria um job novo: a idempotência é por par
+(documento, perfil).
+
+**400** em `ruleset_id` ausente, malformado, nulo, duplicado no corpo, campo
+desconhecido, corpo acima do teto, `Content-Type` ausente ou diferente de
+`application/json`. **400** em `formato`, se o documento não for DOCX.
+**409** se o documento não está em `analisado` nem `formatado`. **404** se o
+documento não existe ou é de outro dono.
+
+**400 em `ruleset_id` também cobre perfil inexistente e perfil fora de
+circulação, com a mesma resposta nos dois casos** — a diferença não é
+observável, de propósito: distinguir transformaria o endpoint num oráculo do
+catálogo.
+
+#### Limites que você precisa conhecer antes de construir tela
+
+1. **Nenhum perfil normativo real existe.** O DOCX sai formatado pelo perfil
+   informado, e nada aqui afirma conformidade com ABNT, APA ou periódico. Os
+   valores da ABNT NBR 14724 não foram preenchidos a partir de fonte oficial.
+2. **202 não garante que a formatação vá acontecer.** As pré-condições são
+   reavaliadas pelo worker no momento da execução, sobre estado commitado.
+3. **Qualquer falha do worker tranca aquele par (documento, perfil) de forma
+   permanente.** A idempotência devolve o job terminal, e **não existe rota de
+   cancelamento nem de nova tentativa**. O caminho é banal: `POST .../formatar`
+   seguido de `POST .../analisar` faz o worker recusar, porque reanálise é
+   transição válida a partir de `analisado`. Depois disso, aquele documento não
+   formata mais com aquele perfil. Use outro perfil, ou outro documento.
+4. **Formatação em andamento não tem cancelamento nem recuperação.** Se o worker
+   morrer no meio, o documento fica em `formatando`, e o estado é por
+   **documento**: nenhum outro perfil socorre.
+5. **Não existe teto de jobs em aberto por dono nem prazo por job.** A fila é
+   sequencial: um documento grande atrasa os demais, de qualquer dono. Rate limit
+   e cota chegam na F7.
+
+### `GET /v1/documentos/{id}/formatado?ruleset_id=<uuid>`
+
+**200**
+```json
+{ "url": "http://127.0.0.1:9000/documentos/...?X-Amz-Signature=...",
+  "expira_em": "2026-10-12T13:05:00Z" }
+```
+
+Mesma forma do preview, e `ruleset_id` é **obrigatório** na query: a resposta é
+o artefato daquele perfil, não "o último formatado". Pedir um perfil cujo job
+não concluiu devolve **409**, nunca o artefato de outro perfil.
+
+**404** se o documento não existe ou é de outro dono. **409** se aquele par
+ainda não tem formatação concluída.
+
+#### Diferenças em relação ao preview, que importam
+
+1. **A URL é capacidade ao portador.** Válida por 15 minutos, somente GET, sem
+   vínculo com o dono e **sem revogação**: quem tiver o link baixa o arquivo
+   dentro da validade. Não a repasse nem a registre em log de cliente.
+2. **O artefato é o pacote original, byte a byte.** O preview é um PDF achatado;
+   o DOCX formatado preserva tudo que o motor não precisou tocar — incluindo
+   `docProps/core.xml` com autoria, alterações rastreadas, comentários e objetos
+   embutidos. Vazar esta URL é mais grave que vazar a do preview.
+3. **A URL pode entregar bytes de uma formatação mais nova do mesmo par.** O
+   endereço do artefato é derivado de (documento, perfil), então reformatar
+   depois de reanalisar reescreve o mesmo objeto.
+4. **A URL é assinada mesmo que o objeto já não exista no storage.** Não há
+   expiração de artefato, e o endereço não é conferido antes de assinar; nesse
+   caso o download falha no storage, não na API.
+
 ### `GET /v1/documentos/{id}/estrutura`
 
 O CDM do documento — o que o sistema entendeu da estrutura dele.
@@ -286,8 +362,10 @@ ou documento de terceiro. Use polling; SSE ainda não está disponível.
 
 O upload bem-sucedido devolve `recebido` — a conversão do preview é síncrona.
 A **análise** é assíncrona: `POST .../analisar` devolve 202 e o status caminha
-`recebido` → `analisando` → `analisado`, ou `falhou`. A formatação (F3) ainda
-não é exposta.
+`recebido` → `analisando` → `analisado`, ou `falhou`. A **formatação** também é
+assíncrona e já é exposta: `POST .../formatar` devolve 202 e o status caminha
+`analisado` → `formatando` → `formatado`, ou `falhou`. Reformatar com outro
+perfil parte de `analisado` ou de `formatado`.
 
 ---
 
@@ -296,7 +374,7 @@ não é exposta.
 Não construa tela para estes; eles chegam nas fases seguintes:
 
 - catálogo de revistas e escolha de ruleset (F3)
-- disparar formatação e baixar DOCX/PDF/LaTeX (F3, F7)
+- conversão do artefato formatado para PDF ou LaTeX (F7) — o DOCX formatado JÁ pode ser disparado e baixado, ver as duas rotas acima
 - acompanhamento de job por SSE (polling via GET já disponível)
 - cadastro, login e histórico por usuário (F7)
 

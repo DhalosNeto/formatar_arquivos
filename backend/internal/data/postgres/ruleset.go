@@ -228,6 +228,16 @@ const (
 // Sem DisallowUnknownFields: o que quebraria não é ler linha antiga com binário
 // novo (campo ausente vira zero-value), e sim ler linha NOVA com binário
 // ANTIGO — rollback ou fleet em versões mistas viraria 500 em toda leitura.
+//
+// ATENÇÃO: o recorte dos campos silentes do ruleset CRIOU esse caso por outra
+// via — não por campo desconhecido, que é o que esta decisão cobre, e sim por
+// campo OBRIGATÓRIO AUSENTE. Um perfil semeado por binário novo, com fonte ou
+// alinhamento omitidos, lido por binário antigo (em que esses campos são string
+// e não ponteiro) cai em "" e é reprovado por Validar, virando 500 em toda
+// leitura daquele perfil. É modo de falha FECHADO — indisponibilidade de um
+// perfil, nunca artefato formatado com fonte vazia — e a mitigação é de deploy:
+// subir o binário ANTES de semear, e não pôr perfil novo no mesmo release de um
+// rollback plausível.
 func decodificarRuleset(dados []byte) (ruleset.Definicao, error) {
 	// Segunda guarda, defesa em profundidade: quem protege a memória do worker é
 	// o teto no SQL de ObterPorID, porque o Scan já materializou o payload aqui.

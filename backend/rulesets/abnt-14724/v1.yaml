@@ -1,0 +1,50 @@
+# Perfil normativo da ABNT NBR 14724:2024 — Trabalhos acadêmicos.
+#
+# IMUTÁVEL: esta versão já é semeada no banco e um documento formatado guarda
+# slug + versão. Mudança de diretriz cria v2.yaml, nunca edita este arquivo.
+#
+# Cada valor abaixo é rastreável a uma seção da norma. Nada que a norma não
+# defina entra aqui — "completar" o perfil com valor de praxe é inventar norma.
+#
+# registro_verificado: false — `fonte` aponta para a página inicial do catálogo
+# oficial, não para o registro individual da norma, cuja URL permanente não foi
+# confirmada. Não existe chave para isso: o schema tem additionalProperties
+# false, então o rastro fica neste comentário e o identificador citável vai em
+# `nome`, o único campo que chega à tela.
+#
+# O QUE ESTE PERFIL NÃO COBRE, para ninguém o ler como "ABNT completa":
+#   - numeração de página no canto superior direito a 2 cm da borda (§5.3):
+#     exige mutar cabeçalho, que o motor não toca;
+#   - filete de 5 cm e fonte menor da nota de rodapé (§5.2.1);
+#   - exceções de espaçamento simples da §5.2 (citações longas, notas,
+#     referências, legendas): dependem de o CDM classificar esses papéis;
+#   - citações (NBR 10520) e referências (NBR 6023), a que a 14724 remete.
+slug: abnt-14724
+versao: 1
+nome: "ABNT NBR 14724:2024 — margens, corpo e entrelinha"
+fonte: https://www.abntcatalogo.com.br/
+pagina:
+  # A4 (§5.1).
+  largura_cm: 21.0
+  altura_cm: 29.7
+  margens:
+    # §5.1, alínea a): anverso — esquerda e superior 3 cm, direita e inferior 2 cm.
+    superior_cm: 3
+    inferior_cm: 2
+    esquerda_cm: 3
+    direita_cm: 2
+corpo:
+  # §5.1 — "fonte tamanho 12" para o texto.
+  tamanho_pt: 12
+  # §5.2 — entrelinha 1,5 no texto.
+  entrelinha: 1.5
+  # As cinco chaves abaixo são OMITIDAS DELIBERADAMENTE: a norma é silente
+  # nelas, e ausência da chave significa "preserve o que o documento tem".
+  #
+  # fonte: a 14724:2024 define o TAMANHO, não a família — não há menção a
+  #   Times New Roman nem a Arial em nenhum ponto do texto normativo.
+  # alinhamento: a norma não prescreve alinhamento do texto corrido.
+  # recuo_cm: a norma não define recuo de primeira linha; a palavra "recuo"
+  #   não aparece no texto normativo.
+  # espaco_antes_pt: a norma não define espaço antes do parágrafo.
+  # espaco_depois_pt: a norma não define espaço depois do parágrafo.

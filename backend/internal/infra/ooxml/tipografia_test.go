@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/daniel-halos/formatador/internal/domain/cdm"
 	"github.com/daniel-halos/formatador/internal/infra/errors"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -17,7 +18,7 @@ func TestAplicarTipografiaFormataRunsDiretosEPreservaPartes(t *testing.T) {
 	fonte := alinhamentoFixture(`<w:p><w:r><w:t xml:space="preserve">  café 😀 café </w:t></w:r><w:r><w:rPr><w:b/><w:i/><w:color w:val="123456"/></w:rPr><w:t>segundo</w:t></w:r><w:r><w:delText>apagado</w:delText></w:r></w:p><w:tbl><w:tr><w:tc><w:p><w:r><w:t>tabela</w:t></w:r></w:p></w:tc></w:tr></w:tbl><w:p><w:r><w:t>alvo</w:t></w:r></w:p>`)
 	original := montarZip(t, append(partesBaseDocx(fonte), entradaZip{nome: "word/media/imagem.bin", conteudo: []byte{0, 255, 17}, metodo: 0}))
 	doc := abrirParaSubstituicao(t, original)
-	require.NoError(t, doc.AplicarTipografia([]int{2, 0}, "A&B <C> \"D\" 'E'", 12))
+	require.NoError(t, doc.AplicarTipografia([]int{2, 0}, apontar("A&B <C> \"D\" 'E'"), 12))
 	saida := salvarSubstituicao(t, doc)
 	parte := lerParte(t, saida, "word/document.xml")
 	propriedades := propriedadesTipografiaDireta(t, parte)
@@ -41,7 +42,7 @@ func TestAplicarTipografiaFormataRunsDiretosEPreservaPartes(t *testing.T) {
 		}
 	}
 	antesRepeticao := saida
-	require.NoError(t, doc.AplicarTipografia([]int{0, 2}, "A&B <C> \"D\" 'E'", 12))
+	require.NoError(t, doc.AplicarTipografia([]int{0, 2}, apontar("A&B <C> \"D\" 'E'"), 12))
 	assert.Equal(t, antesRepeticao, salvarSubstituicao(t, doc), "repetição deve ser byte-idempotente")
 }
 
@@ -49,7 +50,7 @@ func TestAplicarTipografiaPreencheRPrAusenteOuVazio(t *testing.T) {
 	for _, tc := range []struct{ nome, run string }{{"ausente", `<w:r><w:t>x</w:t></w:r>`}, {"vazio", `<w:r><w:rPr></w:rPr><w:t>x</w:t></w:r>`}} {
 		t.Run(tc.nome, func(t *testing.T) {
 			doc := abrirParaSubstituicao(t, docxSintetico(t, alinhamentoFixture(`<w:p>`+tc.run+`</w:p>`)))
-			require.NoError(t, doc.AplicarTipografia([]int{0}, "Fonte", 12))
+			require.NoError(t, doc.AplicarTipografia([]int{0}, apontar("Fonte"), 12))
 			p := propriedadesTipografiaDireta(t, lerParte(t, salvarSubstituicao(t, doc), "word/document.xml"))
 			require.Len(t, p, 1)
 			assert.Equal(t, "Fonte", p[0]["rFonts.ascii"])
@@ -62,7 +63,7 @@ func TestAplicarTipografiaRunSemTextoAtualNaoCriaPropriedades(t *testing.T) {
 	fonte := alinhamentoFixture(`<w:p><w:r><w:delText>apagado</w:delText></w:r></w:p>`)
 	original := docxSintetico(t, fonte)
 	doc := abrirParaSubstituicao(t, original)
-	require.NoError(t, doc.AplicarTipografia([]int{0}, "Fonte", 12))
+	require.NoError(t, doc.AplicarTipografia([]int{0}, apontar("Fonte"), 12))
 	saida := salvarSubstituicao(t, doc)
 	assert.Equal(t, lerParte(t, original, "word/document.xml"), lerParte(t, saida, "word/document.xml"))
 	assert.Equal(t, original, saida, "parágrafo sem w:t atual deve permanecer no-op integral")
@@ -71,7 +72,7 @@ func TestAplicarTipografiaRunSemTextoAtualNaoCriaPropriedades(t *testing.T) {
 func TestAplicarTipografiaGravaValoresFracionariosESubstituiAlvos(t *testing.T) {
 	fonte := alinhamentoFixture(`<w:p><w:r><w:rPr><w:rStyle w:val="Corpo"/><w:rFonts w:ascii="Old" w:hAnsi="Old"/><w:b/><w:sz w:val="20"/><w:szCs w:val="20"/></w:rPr><w:t>texto</w:t></w:r></w:p>`)
 	doc := abrirParaSubstituicao(t, docxSintetico(t, fonte))
-	require.NoError(t, doc.AplicarTipografia([]int{0}, "Nova", 10.25))
+	require.NoError(t, doc.AplicarTipografia([]int{0}, apontar("Nova"), 10.25))
 	p := propriedadesTipografiaDireta(t, lerParte(t, salvarSubstituicao(t, doc), "word/document.xml"))
 	require.Len(t, p, 1)
 	assert.Equal(t, map[string]string{"rFonts.ascii": "Nova", "rFonts.hAnsi": "Nova", "rFonts.eastAsia": "Nova", "rFonts.cs": "Nova", "sz.val": "21", "szCs.val": "21"}, p[0])
@@ -87,7 +88,7 @@ func TestAplicarTipografiaGravaValoresFracionariosESubstituiAlvos(t *testing.T) 
 func TestAplicarTipografiaValidaEntradasAntesDeIO(t *testing.T) {
 	t.Run("receptor nulo precede valores inválidos", func(t *testing.T) {
 		var doc *Documento
-		err := doc.AplicarTipografia(nil, "", math.NaN())
+		err := doc.AplicarTipografia(nil, apontar(""), math.NaN())
 		var nulo *errors.ErroArgumentoNulo
 		require.ErrorAs(t, err, &nulo)
 		assert.Equal(t, "documento", nulo.Argumento)
@@ -97,12 +98,14 @@ func TestAplicarTipografiaValidaEntradasAntesDeIO(t *testing.T) {
 		malformado := []byte(`<w:document incompleto`)
 		require.NoError(t, doc.SubstituirParte("word/document.xml", malformado), "pré-condição: delta opaco instalado")
 		antes := salvarSubstituicao(t, doc)
-		require.NoError(t, doc.AplicarTipografia([]int{}, "Fonte", 12))
+		require.NoError(t, doc.AplicarTipografia([]int{}, apontar("Fonte"), 12))
 		assert.Equal(t, antes, salvarSubstituicao(t, doc))
+		// &"" continua recusado: o sentinela de string vazia foi RECUSADO em
+		// C3 justamente para que um "" acidental não vire no-op silencioso.
 		for _, entrada := range []struct {
-			fonte   string
+			fonte   *string
 			tamanho float64
-		}{{"", 12}, {"Fonte", 0}, {"Fonte", math.NaN()}} {
+		}{{apontar(""), 12}, {apontar("Fonte"), 0}, {apontar("Fonte"), math.NaN()}} {
 			err := doc.AplicarTipografia(nil, entrada.fonte, entrada.tamanho)
 			var validacao *errors.ErroValidacao
 			require.ErrorAs(t, err, &validacao)
@@ -120,7 +123,7 @@ func TestAplicarTipografiaValidaEntradasAntesDeIO(t *testing.T) {
 		t.Run(tc.nome, func(t *testing.T) {
 			doc := abrirParaSubstituicao(t, docxSintetico(t, []byte(`<w:document`)))
 			antes := salvarSubstituicao(t, doc)
-			err := doc.AplicarTipografia([]int{0}, tc.fonte, tc.tamanho)
+			err := doc.AplicarTipografia([]int{0}, apontar(tc.fonte), tc.tamanho)
 			var validacao *errors.ErroValidacao
 			require.ErrorAs(t, err, &validacao, "valor inválido deve ser rejeitado antes de ler o XML malformado")
 			assert.Equal(t, antes, salvarSubstituicao(t, doc))
@@ -147,12 +150,16 @@ func TestAplicarTipografiaRejeitaReferenciasSemDeltaParcial(t *testing.T) {
 			doc := abrirParaSubstituicao(t, docxSintetico(t, fonte))
 			require.NoError(t, doc.SubstituirParte("word/document.xml", fonte), "pré-condição: delta XML válido deve estar instalado")
 			antes := salvarSubstituicao(t, doc)
-			require.Error(t, doc.AplicarTipografia(tc.refs, "Fonte", 12), "entrada deve atingir a rejeição indicada")
+			require.Error(t, doc.AplicarTipografia(tc.refs, apontar("Fonte"), 12), "entrada deve atingir a rejeição indicada")
 			assert.Equal(t, antes, salvarSubstituicao(t, doc), "lote inválido não deixa edição parcial")
 		})
 	}
 }
 
+// A7 (controle) — este teste e os três seguintes são o caminho com fonte
+// PRESENTE: tema concorrente em rFonts, homônimo sem namespace, estruturas de
+// rPr ambíguas e texto em wrapper inline. Comportamento idêntico ao de hoje; é
+// o que impede a mudança de C3 de afrouxar as recusas existentes.
 func TestAplicarTipografiaRejeitaAmbiguidadeDeAtributosAtomica(t *testing.T) {
 	casos := []struct{ nome, rpr string }{
 		{"asciiTheme", `<w:rFonts w:asciiTheme="majorHAnsi"/>`}, {"hAnsiTheme", `<w:rFonts w:hAnsiTheme="majorHAnsi"/>`},
@@ -167,7 +174,7 @@ func TestAplicarTipografiaRejeitaAmbiguidadeDeAtributosAtomica(t *testing.T) {
 			fonte := alinhamentoFixture(`<w:p><w:r><w:rPr>` + tc.rpr + `</w:rPr><w:t>x</w:t></w:r></w:p>`)
 			doc := abrirParaSubstituicao(t, docxSintetico(t, fonte))
 			antes := salvarSubstituicao(t, doc)
-			require.Error(t, doc.AplicarTipografia([]int{0}, "Fonte", 12))
+			require.Error(t, doc.AplicarTipografia([]int{0}, apontar("Fonte"), 12))
 			assert.Equal(t, antes, salvarSubstituicao(t, doc))
 		})
 	}
@@ -191,7 +198,7 @@ func TestAplicarTipografiaRejeitaEstruturasDeRPrAmbiguas(t *testing.T) {
 			doc := abrirParaSubstituicao(t, docxSintetico(t, fonte))
 			require.NoError(t, doc.SubstituirParte("word/document.xml", fonte), "pré-condição: fixture deve ser XML válido")
 			antes := salvarSubstituicao(t, doc)
-			require.Error(t, doc.AplicarTipografia([]int{0}, "Fonte", 12))
+			require.Error(t, doc.AplicarTipografia([]int{0}, apontar("Fonte"), 12))
 			assert.Equal(t, antes, salvarSubstituicao(t, doc))
 		})
 	}
@@ -203,7 +210,7 @@ func TestAplicarTipografiaRecusaTextoDeWrappersMasIgnoraHistorico(t *testing.T) 
 			fonte := alinhamentoFixture(`<w:p><w:r><w:t>direto</w:t></w:r><w:` + wrapper + `><w:r><w:t>envolvido</w:t></w:r></w:` + wrapper + `></w:p>`)
 			doc := abrirParaSubstituicao(t, docxSintetico(t, fonte))
 			antes := salvarSubstituicao(t, doc)
-			require.Error(t, doc.AplicarTipografia([]int{0}, "Fonte", 12))
+			require.Error(t, doc.AplicarTipografia([]int{0}, apontar("Fonte"), 12))
 			assert.Equal(t, antes, salvarSubstituicao(t, doc))
 		})
 	}
@@ -211,13 +218,13 @@ func TestAplicarTipografiaRecusaTextoDeWrappersMasIgnoraHistorico(t *testing.T) 
 		fonte := alinhamentoFixture(`<w:p><w:r><w:t>direto</w:t></w:r><mc:AlternateContent xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"><mc:Choice Requires="w"><w:r><w:t>alternativo</w:t></w:r></mc:Choice></mc:AlternateContent></w:p>`)
 		doc := abrirParaSubstituicao(t, docxSintetico(t, fonte))
 		antes := salvarSubstituicao(t, doc)
-		require.Error(t, doc.AplicarTipografia([]int{0}, "Fonte", 12))
+		require.Error(t, doc.AplicarTipografia([]int{0}, apontar("Fonte"), 12))
 		assert.Equal(t, antes, salvarSubstituicao(t, doc))
 	})
 	t.Run("delText e histórico não são alvos", func(t *testing.T) {
 		fonte := alinhamentoFixture(`<w:p><w:pPr><w:pPrChange w:id="1"><w:pPr><w:keepNext/></w:pPr></w:pPrChange></w:pPr><w:r><w:rPr><w:b/><w:rPrChange w:id="2"><w:rPr><w:rFonts w:asciiTheme="majorHAnsi"/></w:rPr></w:rPrChange></w:rPr><w:delText>apagado</w:delText><w:t>atual</w:t></w:r></w:p>`)
 		doc := abrirParaSubstituicao(t, docxSintetico(t, fonte))
-		require.NoError(t, doc.AplicarTipografia([]int{0}, "Fonte", 12))
+		require.NoError(t, doc.AplicarTipografia([]int{0}, apontar("Fonte"), 12))
 		saida := string(lerParte(t, salvarSubstituicao(t, doc), "word/document.xml"))
 		assert.Contains(t, saida, `<w:rPrChange w:id="2"><w:rPr><w:rFonts w:asciiTheme="majorHAnsi"/></w:rPr></w:rPrChange>`)
 		assert.Contains(t, saida, `<w:pPrChange w:id="1"><w:pPr><w:keepNext/></w:pPr></w:pPrChange>`)
@@ -232,7 +239,7 @@ func TestAplicarTipografiaPreservaBOMPrefixosEDeltaExistente(t *testing.T) {
 	doc := abrirParaSubstituicao(t, original)
 	antes := []byte("\xef\xbb\xbf<?xml version=\"1.0\" encoding=\"UTF-8\"?><x:document xmlns:x=\"" + espacoNomesW + "\"><x:body><x:p><x:r><x:t>anterior</x:t></x:r></x:p></x:body></x:document>")
 	require.NoError(t, doc.SubstituirParte("word/document.xml", antes), "pré-condição: delta anterior substituível")
-	require.NoError(t, doc.AplicarTipografia([]int{0}, "Fonte", 12))
+	require.NoError(t, doc.AplicarTipografia([]int{0}, apontar("Fonte"), 12))
 	saida := lerParte(t, salvarSubstituicao(t, doc), "word/document.xml")
 	assert.True(t, bytes.HasPrefix(saida, []byte{0xef, 0xbb, 0xbf}), "BOM preservado")
 	assert.Contains(t, string(saida), `<x:rFonts`)
@@ -280,4 +287,180 @@ func propriedadesTipografiaDireta(t *testing.T, conteudo []byte) []map[string]st
 		delete(p, "__emRun")
 	}
 	return resultado
+}
+
+// ---------------------------------------------------------------------------
+// C3 — fonte SILENTE (nil): grava só o tamanho e não toca w:rFonts
+//
+// apontar existe para que o teste diga, no tipo, a diferença que C3 introduz:
+// nil é "a norma não define família" e &"" continua sendo entrada inválida.
+// ---------------------------------------------------------------------------
+
+func apontar[T any](valor T) *T { return &valor }
+
+// tagsRFonts devolve, na ordem do documento, o texto BRUTO de cada tag
+// w:rFonts. Comparar a lista inteira é o que prova preservação byte a byte do
+// nó — contagem igual com atributos reescritos passaria.
+func tagsRFonts(documentoXML []byte) []string {
+	var tags []string
+	resto := string(documentoXML)
+	for {
+		inicio := strings.Index(resto, "<w:rFonts")
+		if inicio < 0 {
+			return tags
+		}
+		resto = resto[inicio:]
+		fim := strings.Index(resto, ">")
+		if fim < 0 {
+			return append(tags, resto)
+		}
+		tags = append(tags, resto[:fim+1])
+		resto = resto[fim+1:]
+	}
+}
+
+// ordinaisDesformatadoComRPrForaDeOrdem são os parágrafos de
+// artigo-desformatado.docx cujo w:rPr traz w:sz ANTES de w:i/w:b, violando a
+// ordem de CT_RPr. A recusa é ESTRUTURAL e independe de fonte — vale com
+// fonte presente e com fonte nil —, então eles ficam fora da seleção de A5,
+// que prova preservação de rFonts, não a guarda de ordem.
+var ordinaisDesformatadoComRPrForaDeOrdem = []int{1, 3, 5, 22, 29, 30}
+
+func referenciasDeParagrafoDaFixture(t *testing.T, pacote []byte, excluir []int) []int {
+	t.Helper()
+
+	doc := abrirParaSubstituicao(t, pacote)
+	brutos, err := doc.ExtrairBlocos()
+	require.NoError(t, err)
+
+	fora := make(map[int]bool, len(excluir))
+	for _, ordinal := range excluir {
+		fora[ordinal] = true
+	}
+	var referencias []int
+	for _, bruto := range brutos {
+		bloco := ClassificarPorEstiloDocx(bruto)
+		if bloco.Papel == cdm.Paragrafo && !fora[bloco.RefXML] {
+			referencias = append(referencias, bloco.RefXML)
+		}
+	}
+	require.NotEmpty(t, referencias, "pré-condição: a fixture precisa ter parágrafos classificados")
+	return referencias
+}
+
+// A5 — fonte nil sobre artigo-desformatado.docx, que tem 57 w:rFonts
+// (medido). artigo-real-libreoffice.docx NÃO serve: tem ZERO rFonts, e
+// "preservado" passaria trivialmente nele.
+func TestAplicarTipografiaFonteSilentePreservaRFontsDoPacoteReal(t *testing.T) {
+	original := lerFixture(t, "artigo-desformatado.docx")
+	documentoOriginal := lerParte(t, original, "word/document.xml")
+
+	rfontsAntes := tagsRFonts(documentoOriginal)
+	require.Len(t, rfontsAntes, 57, "pré-condição medida: a fixture tem 57 w:rFonts")
+
+	referencias := referenciasDeParagrafoDaFixture(t, original, ordinaisDesformatadoComRPrForaDeOrdem)
+
+	doc := abrirParaSubstituicao(t, original)
+	require.NoError(t, doc.AplicarTipografia(referencias, nil, 12),
+		"A5: fonte nil é norma silente, não entrada inválida")
+
+	saida := salvarSubstituicao(t, doc)
+	documentoNovo := lerParte(t, saida, "word/document.xml")
+	require.NotEqual(t, documentoOriginal, documentoNovo, "pré-condição: o caso precisa produzir delta")
+
+	assert.Equal(t, rfontsAntes, tagsRFonts(documentoNovo),
+		"A5: os 57 w:rFonts saem byte a byte iguais — nem sobrescritos nem removidos")
+
+	blocos := xmlDosBlocosDeTopo(t, documentoNovo)
+	for _, ordinal := range referencias {
+		assert.Contains(t, blocos[ordinal], `<w:sz w:val="24"/>`, "A5: w:sz gravado no parágrafo %d", ordinal)
+		assert.Contains(t, blocos[ordinal], `<w:szCs w:val="24"/>`, "A5: w:szCs gravado no parágrafo %d", ordinal)
+	}
+
+	assert.Equal(t, extrairTextosWT(t, documentoOriginal), extrairTextosWT(t, documentoNovo),
+		"C3: a sequência de runes dos w:t é idêntica")
+	for _, nome := range listarPartes(t, original) {
+		if nome != "word/document.xml" {
+			assert.Equal(t, lerParte(t, original, nome), lerParte(t, saida, nome), "parte não alvo %s", nome)
+		}
+	}
+
+	// A guarda de ordem de CT_RPr NÃO afrouxa com fonte nil: os ordinais
+	// excluídos são recusados nos dois caminhos.
+	for _, ordinal := range ordinaisDesformatadoComRPrForaDeOrdem {
+		limpo := abrirParaSubstituicao(t, original)
+		require.Error(t, limpo.AplicarTipografia([]int{ordinal}, apontar("Fonte"), 12),
+			"pré-condição: o parágrafo %d é recusado com fonte PRESENTE", ordinal)
+		assert.Error(t, limpo.AplicarTipografia([]int{ordinal}, nil, 12),
+			"A5: a recusa de ordem de CT_RPr continua valendo com fonte nil (parágrafo %d)", ordinal)
+		assert.Equal(t, original, salvarSubstituicao(t, limpo), "A5: a recusa não deixa delta")
+	}
+}
+
+// A6 — fonte nil em documento cujos runs NÃO têm w:rFonts algum: nenhum
+// rFonts é CRIADO. É o erro que C3 pode introduzir ao montar
+// valores["rFonts"] com fonte vazia e gravar ascii="".
+func TestAplicarTipografiaFonteSilenteNaoCriaRFonts(t *testing.T) {
+	for _, tc := range []struct{ nome, run string }{
+		{"rPr ausente", `<w:r><w:t>x</w:t></w:r>`},
+		{"rPr vazio", `<w:r><w:rPr></w:rPr><w:t>x</w:t></w:r>`},
+		{"rPr sem rFonts", `<w:r><w:rPr><w:b/><w:i/></w:rPr><w:t>x</w:t></w:r>`},
+	} {
+		t.Run(tc.nome, func(t *testing.T) {
+			fonte := alinhamentoFixture(`<w:p>` + tc.run + `</w:p>`)
+			require.NotContains(t, string(fonte), "rFonts", "pré-condição: a fixture não tem w:rFonts")
+
+			doc := abrirParaSubstituicao(t, docxSintetico(t, fonte))
+			require.NoError(t, doc.AplicarTipografia([]int{0}, nil, 12))
+
+			saida := lerParte(t, salvarSubstituicao(t, doc), "word/document.xml")
+			assert.Empty(t, tagsRFonts(saida), "A6: nenhum w:rFonts pode ser criado com fonte silente")
+			assert.NotContains(t, string(saida), `ascii=""`, "A6: nem rFonts vazio, nem família padrão inventada")
+			assert.Contains(t, string(saida), `<w:sz w:val="24"/>`)
+			assert.Contains(t, string(saida), `<w:szCs w:val="24"/>`)
+		})
+	}
+}
+
+// A14 — AFROUXAMENTO DELIBERADO: com fonte nil o nó w:rFonts não é alvo, logo
+// validarAlvoTipografia não roda para ele. Tema concorrente e homônimo sem
+// namespace deixam de recusar, e o rFonts sai byte a byte igual.
+//
+// É correto: não mutamos o nó, não há conflito a resolver. Sem este critério o
+// afrouxamento seria indistinguível de regressão na reauditoria — o controle
+// do caminho com fonte PRESENTE é
+// TestAplicarTipografiaRejeitaAmbiguidadeDeAtributosAtomica (A7).
+func TestAplicarTipografiaFonteSilenteAceitaRFontsAmbiguoSemMutar(t *testing.T) {
+	for _, tc := range []struct{ nome, rpr string }{
+		{"asciiTheme", `<w:rFonts w:asciiTheme="majorHAnsi"/>`},
+		{"hAnsiTheme", `<w:rFonts w:hAnsiTheme="majorHAnsi"/>`},
+		{"eastAsiaTheme", `<w:rFonts w:eastAsiaTheme="majorEastAsia"/>`},
+		{"cstheme", `<w:rFonts w:cstheme="majorBidi"/>`},
+		{"csTheme", `<w:rFonts w:csTheme="majorBidi"/>`},
+		{"ascii sem namespace", `<w:rFonts ascii="Old"/>`},
+		{"hAnsi sem namespace", `<w:rFonts hAnsi="Old"/>`},
+		{"eastAsia sem namespace", `<w:rFonts eastAsia="Old"/>`},
+		{"cs sem namespace", `<w:rFonts cs="Old"/>`},
+		{"tema e família juntos", `<w:rFonts w:ascii="Old" w:asciiTheme="majorHAnsi"/>`},
+	} {
+		t.Run(tc.nome, func(t *testing.T) {
+			fonte := alinhamentoFixture(`<w:p><w:r><w:rPr>` + tc.rpr + `</w:rPr><w:t>x</w:t></w:r></w:p>`)
+			pacote := docxSintetico(t, fonte)
+
+			// Pré-condição: com fonte PRESENTE este mesmo documento é recusado.
+			// É o que torna o afrouxamento visível em vez de vacuoso.
+			controle := abrirParaSubstituicao(t, pacote)
+			require.Error(t, controle.AplicarTipografia([]int{0}, apontar("Fonte"), 12),
+				"pré-condição: com fonte presente o rFonts ambíguo é recusado")
+
+			doc := abrirParaSubstituicao(t, pacote)
+			require.NoError(t, doc.AplicarTipografia([]int{0}, nil, 12),
+				"A14: com fonte silente o rFonts não é alvo e o documento é ACEITO")
+
+			saida := lerParte(t, salvarSubstituicao(t, doc), "word/document.xml")
+			assert.Equal(t, []string{tc.rpr}, tagsRFonts(saida), "A14: o w:rFonts sai byte a byte igual")
+			assert.Contains(t, string(saida), `<w:sz w:val="24"/>`, "A14: o tamanho normativo é gravado")
+			assert.Contains(t, string(saida), `<w:szCs w:val="24"/>`)
+		})
+	}
 }

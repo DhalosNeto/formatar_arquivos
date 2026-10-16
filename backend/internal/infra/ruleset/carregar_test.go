@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -13,6 +14,26 @@ import (
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
 )
+
+// apontar devolve o endereço de um literal: nos cinco campos silentes de
+// Corpo, ponteiro é "a norma diz isto" e nil é "a norma não diz" (C1).
+func apontar[T any](valor T) *T { return &valor }
+
+// camposSilentesDoCorpo são as cinco chaves que SAEM de required no schema
+// (C2). Ausência da chave é o caminho que produz nil em Go.
+var camposSilentesDoCorpo = []string{"fonte", "alinhamento", "recuo_cm", "espaco_antes_pt", "espaco_depois_pt"}
+
+func silenteNoCorpo(caminho []string, campo string) bool {
+	if len(caminho) != 1 || caminho[0] != "corpo" {
+		return false
+	}
+	for _, silente := range camposSilentesDoCorpo {
+		if silente == campo {
+			return true
+		}
+	}
+	return false
+}
 
 func lerPerfil(t *testing.T) []byte {
 	t.Helper()
@@ -37,7 +58,7 @@ func TestCarregarPerfilSintetico(t *testing.T) {
 	copia := append([]byte(nil), dados...)
 	d, err := carregar(dados)
 	require.NoError(t, err)
-	esperado := domainruleset.Definicao{Slug: "perfil-sintetico", Versao: 1, Nome: "Perfil sintético de teste", Fonte: "https://example.org/perfil", Pagina: domainruleset.Pagina{LarguraCM: 20, AlturaCM: 28, Margens: domainruleset.Margens{SuperiorCM: 2, InferiorCM: 2, EsquerdaCM: 2, DireitaCM: 2}}, Corpo: domainruleset.Corpo{Fonte: "Fonte Sintética", TamanhoPT: 11, Entrelinha: 1.25, RecuoCM: 0, EspacoAntesPT: 0, EspacoDepoisPT: 0, Alinhamento: "justificado"}}
+	esperado := domainruleset.Definicao{Slug: "perfil-sintetico", Versao: 1, Nome: "Perfil sintético de teste", Fonte: "https://example.org/perfil", Pagina: domainruleset.Pagina{LarguraCM: 20, AlturaCM: 28, Margens: domainruleset.Margens{SuperiorCM: 2, InferiorCM: 2, EsquerdaCM: 2, DireitaCM: 2}}, Corpo: domainruleset.Corpo{Fonte: apontar("Fonte Sintética"), TamanhoPT: 11, Entrelinha: 1.25, RecuoCM: apontar(0.0), EspacoAntesPT: apontar(0.0), EspacoDepoisPT: apontar(0.0), Alinhamento: apontar("justificado")}}
 	assert.Equal(t, esperado, d)
 	assert.Equal(t, copia, dados)
 	assert.NoError(t, d.Validar())
@@ -102,6 +123,16 @@ func TestCarregarCamposObrigatoriosEObjetosFechados(t *testing.T) {
 					}
 					dados, err := yaml.Marshal(raiz)
 					require.NoError(t, err)
+					// A4/C2: os cinco campos silentes de corpo saem de
+					// required — a AUSÊNCIA da chave é o caminho que produz
+					// nil. Chave presente com valor nulo e tipo incorreto
+					// continuam recusados.
+					if operacao == "ausente" && silenteNoCorpo(caminho, campo) {
+						definicao, err := Carregar(dados)
+						require.NoError(t, err, "A4: ausência de %q é silêncio da norma, não erro", campo)
+						assert.NoError(t, definicao.Validar())
+						return
+					}
 					exigirRejeicao(t, dados)
 				})
 			}
@@ -172,4 +203,99 @@ func TestCarregarErrosFixosSemConteudo(t *testing.T) {
 			}
 		})
 	}
+}
+
+// ---------------------------------------------------------------------------
+// A4 — YAML sem as cinco chaves silentes, chave desconhecida, sem tamanho_pt
+// ---------------------------------------------------------------------------
+
+// perfilSilente é o mesmo perfil sintético com o corpo reduzido ao que uma
+// norma silente declara: tamanho e entrelinha.
+const perfilSilente = `slug: perfil-silente
+versao: 1
+nome: Perfil silente de teste
+fonte: https://example.org/perfil
+pagina:
+  largura_cm: 21.0
+  altura_cm: 29.7
+  margens:
+    superior_cm: 3
+    inferior_cm: 2
+    esquerda_cm: 3
+    direita_cm: 2
+corpo:
+  tamanho_pt: 12
+  entrelinha: 1.5
+`
+
+func TestCarregarSemChavesSilentesProduzNil(t *testing.T) {
+	require.NotContains(t, perfilSilente, "recuo_cm",
+		"pré-condição: o YAML do caso não pode declarar nenhuma das cinco chaves silentes")
+
+	definicao, err := Carregar([]byte(perfilSilente))
+	require.NoError(t, err, "A4: ausência das cinco chaves é perfil válido")
+	require.NoError(t, definicao.Validar())
+
+	assert.Nil(t, definicao.Corpo.Fonte, "A4: corpo.fonte ausente no YAML produz nil")
+	assert.Nil(t, definicao.Corpo.Alinhamento, "A4: corpo.alinhamento ausente no YAML produz nil")
+	assert.Nil(t, definicao.Corpo.RecuoCM, "A4: corpo.recuo_cm ausente no YAML produz nil")
+	assert.Nil(t, definicao.Corpo.EspacoAntesPT, "A4: corpo.espaco_antes_pt ausente no YAML produz nil")
+	assert.Nil(t, definicao.Corpo.EspacoDepoisPT, "A4: corpo.espaco_depois_pt ausente no YAML produz nil")
+	assert.Equal(t, 12.0, definicao.Corpo.TamanhoPT)
+	assert.Equal(t, 1.5, definicao.Corpo.Entrelinha)
+
+	t.Run("chave desconhecida segue recusada", func(t *testing.T) {
+		exigirRejeicao(t, []byte(perfilSilente+"  chave_desconhecida: 1\n"))
+	})
+	t.Run("tamanho_pt segue obrigatorio", func(t *testing.T) {
+		exigirRejeicao(t, []byte(strings.Replace(perfilSilente, "  tamanho_pt: 12\n", "", 1)))
+	})
+	t.Run("entrelinha segue obrigatoria", func(t *testing.T) {
+		exigirRejeicao(t, []byte(strings.Replace(perfilSilente, "  entrelinha: 1.5\n", "", 1)))
+	})
+	t.Run("chave silente presente com valor nulo é recusada", func(t *testing.T) {
+		for _, chave := range camposSilentesDoCorpo {
+			t.Run(chave, func(t *testing.T) {
+				exigirRejeicao(t, []byte(perfilSilente+"  "+chave+": null\n"))
+			})
+		}
+	})
+}
+
+// ---------------------------------------------------------------------------
+// A11 — o primeiro perfil normativo real: backend/rulesets/abnt-14724/v1.yaml
+// ---------------------------------------------------------------------------
+
+func TestCarregarPerfilABNT14724(t *testing.T) {
+	caminho := filepath.Join("..", "..", "..", "rulesets", "abnt-14724", "v1.yaml")
+	conteudo, err := os.ReadFile(caminho)
+	require.NoError(t, err, "A11: o perfil %s precisa existir", caminho)
+
+	definicao, err := Carregar(conteudo)
+	require.NoError(t, err, "A11: o perfil normativo precisa carregar e validar")
+	require.NoError(t, definicao.Validar())
+
+	assert.Equal(t, "abnt-14724", definicao.Slug)
+	assert.Equal(t, 1, definicao.Versao)
+	// O identificador citável mora em `nome`: é o único campo que chega à tela.
+	assert.Contains(t, definicao.Nome, "14724", "A11/C5: o nome carrega o identificador da norma")
+
+	// §5.1 — A4 e margens do anverso; §5.2 — entrelinha 1,5.
+	assert.Equal(t, 21.0, definicao.Pagina.LarguraCM)
+	assert.Equal(t, 29.7, definicao.Pagina.AlturaCM)
+	assert.Equal(t, domainruleset.Margens{SuperiorCM: 3, InferiorCM: 2, EsquerdaCM: 3, DireitaCM: 2}, definicao.Pagina.Margens)
+	assert.Equal(t, 12.0, definicao.Corpo.TamanhoPT)
+	assert.Equal(t, 1.5, definicao.Corpo.Entrelinha)
+
+	// Os cinco campos que a 14724:2024 NÃO define precisam sair nil. Preencher
+	// qualquer um deles é inventar norma.
+	assert.Nil(t, definicao.Corpo.Fonte, "A11: a norma não define família de fonte")
+	assert.Nil(t, definicao.Corpo.Alinhamento, "A11: a norma não define alinhamento do corpo")
+	assert.Nil(t, definicao.Corpo.RecuoCM, "A11: a norma não define recuo de primeira linha")
+	assert.Nil(t, definicao.Corpo.EspacoAntesPT, "A11: a norma não define espaço antes do parágrafo")
+	assert.Nil(t, definicao.Corpo.EspacoDepoisPT, "A11: a norma não define espaço depois do parágrafo")
+
+	// Nenhuma rede é tocada no carregamento (carregarBloqueado): a URL é
+	// rastro para humano, não dependência.
+	assert.Equal(t, "https://www.abntcatalogo.com.br/", definicao.Fonte)
 }

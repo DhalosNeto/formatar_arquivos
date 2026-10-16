@@ -16,8 +16,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// apontarRuleset devolve o endereço de um literal: os cinco campos silentes de
+// ruleset.Corpo são ponteiro. Nome próprio para não colidir com o apontar do
+// arquivo de integração, compilado sob a tag integration no mesmo pacote.
+func apontarRuleset[T any](valor T) *T { return &valor }
+
 func TestSemearValidaLoteAntesDeAcessarPool(t *testing.T) {
-	valida := ruleset.Definicao{Slug: "perfil", Versao: 1, Nome: "Sintético", Fonte: "https://example.org", Pagina: ruleset.Pagina{LarguraCM: 20, AlturaCM: 28}, Corpo: ruleset.Corpo{Fonte: "Sintética", TamanhoPT: 11, Entrelinha: 1.25, Alinhamento: "justificado"}}
+	valida := ruleset.Definicao{Slug: "perfil", Versao: 1, Nome: "Sintético", Fonte: "https://example.org", Pagina: ruleset.Pagina{LarguraCM: 20, AlturaCM: 28}, Corpo: ruleset.Corpo{Fonte: apontarRuleset("Sintética"), TamanhoPT: 11, Entrelinha: 1.25, Alinhamento: apontarRuleset("justificado")}}
 	require.NoError(t, valida.Validar())
 	casos := []struct {
 		nome    string
@@ -74,13 +79,13 @@ func definicaoSintetica() ruleset.Definicao {
 			Margens:   ruleset.Margens{SuperiorCM: 3, InferiorCM: 2, EsquerdaCM: 3, DireitaCM: 2},
 		},
 		Corpo: ruleset.Corpo{
-			Fonte:          "Fonte Sintética",
+			Fonte:          apontarRuleset("Fonte Sintética"),
 			TamanhoPT:      12,
 			Entrelinha:     1.5,
-			RecuoCM:        1.25,
-			EspacoAntesPT:  6,
-			EspacoDepoisPT: 12,
-			Alinhamento:    "justificado",
+			RecuoCM:        apontarRuleset(1.25),
+			EspacoAntesPT:  apontarRuleset(6.0),
+			EspacoDepoisPT: apontarRuleset(12.0),
+			Alinhamento:    apontarRuleset("justificado"),
 		},
 	}
 }
@@ -145,9 +150,9 @@ func TestDecodificarRulesetDevolveDefinicaoCompleta(t *testing.T) {
 		"margem direita":  esperada.Pagina.Margens.DireitaCM,
 		"tamanho":         esperada.Corpo.TamanhoPT,
 		"entrelinha":      esperada.Corpo.Entrelinha,
-		"recuo":           esperada.Corpo.RecuoCM,
-		"espaço antes":    esperada.Corpo.EspacoAntesPT,
-		"espaço depois":   esperada.Corpo.EspacoDepoisPT,
+		"recuo":           *esperada.Corpo.RecuoCM,
+		"espaço antes":    *esperada.Corpo.EspacoAntesPT,
+		"espaço depois":   *esperada.Corpo.EspacoDepoisPT,
 	} {
 		require.NotZero(t, valor, "fixture com %s zerada tornaria o Equal trivialmente verdadeiro", nome)
 	}
@@ -218,7 +223,7 @@ func TestDecodificarRulesetReclassificaErroDeValidar(t *testing.T) {
 		{"pagina_margens_nao_cabem_na_largura", func(d *ruleset.Definicao) {
 			d.Pagina.Margens.EsquerdaCM, d.Pagina.Margens.DireitaCM = 11, 11
 		}, "pagina.margens", []string{"11"}},
-		{"corpo_alinhamento_desconhecido", func(d *ruleset.Definicao) { d.Corpo.Alinhamento = "diagonal" }, "corpo.alinhamento", []string{"diagonal"}},
+		{"corpo_alinhamento_desconhecido", func(d *ruleset.Definicao) { d.Corpo.Alinhamento = apontarRuleset("diagonal") }, "corpo.alinhamento", []string{"diagonal"}},
 	}
 	for _, caso := range casos {
 		t.Run(caso.nome, func(t *testing.T) {

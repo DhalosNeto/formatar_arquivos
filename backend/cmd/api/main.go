@@ -176,10 +176,16 @@ func montarDependencias(
 		return root.Dependencias{}, err
 	}
 
+	servicoFormatacao, err := webservices.NovoServicoFormatacao(
+		servicoDominio, servicoCriacaoJob, servicoConsultaJob, clienteStorage)
+	if err != nil {
+		return root.Dependencias{}, err
+	}
+
 	return root.Dependencias{
 		Saude: saude.NovoControlador(versao, gerenciador,
 			storage.NovoVerificador(clienteStorage), pdfconv.NovoVerificador(conversor)),
-		Documentos: documentos.NovoControlador(servicoDocumento, servicoAnalise, servicoEstrutura),
+		Documentos: documentos.NovoControlador(servicoDocumento, servicoAnalise, servicoEstrutura, servicoFormatacao),
 		Jobs:       jobs.NovoControlador(servicoJobs),
 		// Teto de transporte com folga sobre o teto de negócio: o multipart
 		// carrega boundary e cabeçalhos além do arquivo, então cortar no valor

@@ -13,12 +13,21 @@ import (
 
 // AplicarTipografia grava fonte e tamanho diretamente nos runs de texto dos
 // parágrafos indicados pelos ordinais de ExtrairBlocos.
-func (documento *Documento) AplicarTipografia(referencias []int, fonte string, tamanhoPT float64) error {
+//
+// fonte nil é NORMA SILENTE: grava somente w:sz e w:szCs e preserva o
+// w:rFonts do documento, que deixa de ser alvo — logo validarAlvoTipografia
+// não roda para ele e um rFonts com tema ou homônimo sem namespace não recusa
+// mais, porque não há conflito a resolver se o nó não é mutado. Um ponteiro
+// para string vazia continua sendo entrada inválida: o sentinela de string
+// vazia transformaria um "" acidental em no-op silencioso.
+func (documento *Documento) AplicarTipografia(referencias []int, fonte *string, tamanhoPT float64) error {
 	if documento == nil {
 		return errors.NovoErroArgumentoNulo("documento")
 	}
-	if err := ruleset.ValidarFonteCorpo(fonte); err != nil {
-		return err
+	if fonte != nil {
+		if err := ruleset.ValidarFonteCorpo(*fonte); err != nil {
+			return err
+		}
 	}
 	if err := ruleset.ValidarTamanhoCorpoPT(tamanhoPT); err != nil {
 		return err
@@ -126,16 +135,19 @@ func temTextoEmWrapper(no, paragrafo *noXMLPagina) bool {
 // CT_RPr: subconjunto estrito e em ordem; extensões são recusadas.
 const ordemTipografiaRun = "|rStyle|rFonts|b|bCs|i|iCs|caps|smallCaps|strike|dstrike|outline|shadow|emboss|imprint|noProof|snapToGrid|vanish|webHidden|color|spacing|w|kern|position|sz|szCs|highlight|u|effect|bdr|shd|fitText|vertAlign|rtl|cs|em|lang|eastAsianLayout|specVanish|oMath|rPrChange|"
 
-func prepararTipografiaRun(dados []byte, run *noXMLPagina, fonte, tamanho string) (edicaoXMLPagina, error) {
+func prepararTipografiaRun(dados []byte, run *noXMLPagina, fonte *string, tamanho string) (edicaoXMLPagina, error) {
 	rprs := filhosW(run, "rPr")
 	if len(rprs) > 1 {
 		return edicaoXMLPagina{}, erroXMLPagina()
 	}
-	fonteEscapada := escaparAtributoTipografia(fonte)
 	valores := map[string]map[string]string{
-		"rFonts": {"ascii": fonteEscapada, "hAnsi": fonteEscapada, "eastAsia": fonteEscapada, "cs": fonteEscapada},
-		"sz":     {"val": tamanho},
-		"szCs":   {"val": tamanho},
+		"sz":   {"val": tamanho},
+		"szCs": {"val": tamanho},
+	}
+	// Com fonte silente, rFonts não entra em valores: não é criado nem alterado.
+	if fonte != nil {
+		fonteEscapada := escaparAtributoTipografia(*fonte)
+		valores["rFonts"] = map[string]string{"ascii": fonteEscapada, "hAnsi": fonteEscapada, "eastAsia": fonteEscapada, "cs": fonteEscapada}
 	}
 	if len(rprs) == 0 {
 		novo := montarPropriedadesRun(run, valores)
@@ -171,7 +183,7 @@ func prepararTipografiaRun(dados []byte, run *noXMLPagina, fonte, tamanho string
 		return edicaoXMLPagina{}, erroXMLPagina()
 	}
 	var edicoes []edicaoXMLPagina
-	for _, local := range []string{"rFonts", "sz", "szCs"} {
+	for _, local := range alvosTipografia(valores) {
 		if filho := existentes[local]; filho != nil {
 			if err := validarAlvoTipografia(dados, filho); err != nil {
 				return edicaoXMLPagina{}, err
@@ -234,9 +246,24 @@ func montarPropriedadesRun(run *noXMLPagina, valores map[string]map[string]strin
 }
 
 func montarFilhosTipografia(pai *noXMLPagina, valores map[string]map[string]string) string {
-	return novaPropriedadeParagrafo(pai, "rFonts", valores["rFonts"]) +
-		novaPropriedadeParagrafo(pai, "sz", valores["sz"]) +
-		novaPropriedadeParagrafo(pai, "szCs", valores["szCs"])
+	var saida strings.Builder
+	for _, local := range alvosTipografia(valores) {
+		saida.WriteString(novaPropriedadeParagrafo(pai, local, valores[local]))
+	}
+	return saida.String()
+}
+
+// alvosTipografia devolve, na ordem de CT_RPr, só os filhos que o plano pede.
+// Omitir rFonts não desordena: a ordem relativa de sz e szCs é preservada e a
+// inserção por rank usa ordemTipografiaRun.
+func alvosTipografia(valores map[string]map[string]string) []string {
+	alvos := make([]string, 0, len(valores))
+	for _, local := range []string{"rFonts", "sz", "szCs"} {
+		if valores[local] != nil {
+			alvos = append(alvos, local)
+		}
+	}
+	return alvos
 }
 
 func escaparAtributoTipografia(valor string) string {

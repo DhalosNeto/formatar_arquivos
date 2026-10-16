@@ -268,3 +268,165 @@ func TestTamanhoMaximoChaveTemOValorDoContrato(t *testing.T) {
 		t.Fatalf("esperava TamanhoMaximoChave 1024, obteve %d", TamanhoMaximoChave)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// A1 e A2 (C1) — NovaChaveFormatado e o alargamento de segueGramaticaCanonica.
+//
+// RED por COMPILAÇÃO enquanto NovaChaveFormatado não existe.
+// ---------------------------------------------------------------------------
+
+// rulesetFixoDeTeste e outroRulesetFixoDeTeste são dois perfis DISTINTOS: a
+// colisão que A1 mata é entre perfis, não entre documentos.
+const (
+	rulesetFixoDeTeste      = "9b7c1d2e-3f40-4a51-8b62-7c8d9e0f1a2b"
+	outroRulesetFixoDeTeste = "1c2d3e4f-5061-4728-9a3b-4c5d6e7f8091"
+)
+
+func TestNovaChaveFormatadoEhDeterministicaEDistinguePerfil(t *testing.T) {
+	t.Parallel()
+
+	documento := uuid.MustParse(idFixoDeTeste)
+	perfil := uuid.MustParse(rulesetFixoDeTeste)
+	outroPerfil := uuid.MustParse(outroRulesetFixoDeTeste)
+
+	chave, err := NovaChaveFormatado(documento, perfil)
+	if err != nil {
+		t.Fatalf("não esperava erro, obteve %v", err)
+	}
+
+	esperada := "documentos/" + documento.String() + "/formatado-" + perfil.String() + ".docx"
+	if chave.String() != esperada {
+		t.Fatalf("chave = %q, esperava %q", chave.String(), esperada)
+	}
+
+	// MESMO par -> MESMA chave: é o que faz retry e reexecução com o mesmo
+	// perfil sobrescreverem o próprio objeto em vez de acumular lixo no bucket.
+	repetida, err := NovaChaveFormatado(documento, perfil)
+	if err != nil {
+		t.Fatalf("não esperava erro na repetição, obteve %v", err)
+	}
+	if repetida != chave {
+		t.Fatalf("o mesmo par devolveu %q e %q; o construtor precisa ser determinístico", chave, repetida)
+	}
+
+	// Perfil DIFERENTE -> chave DIFERENTE: sem isto o job do perfil Y
+	// sobrescreveria os bytes do perfil X sob o mesmo endereço.
+	deOutroPerfil, err := NovaChaveFormatado(documento, outroPerfil)
+	if err != nil {
+		t.Fatalf("não esperava erro para o segundo perfil, obteve %v", err)
+	}
+	if deOutroPerfil == chave {
+		t.Fatalf("dois rulesets distintos produziram a mesma chave %q", chave)
+	}
+
+	// E distinta das outras famílias de objeto do mesmo documento.
+	original, err := NovaChaveOriginal(documento, FormatoDocx)
+	if err != nil {
+		t.Fatalf("não esperava erro ao montar a chave original, obteve %v", err)
+	}
+	preview, err := NovaChavePreviewPDF(documento)
+	if err != nil {
+		t.Fatalf("não esperava erro ao montar a chave de preview, obteve %v", err)
+	}
+	if chave == original || chave == preview {
+		t.Fatalf("a chave do formatado (%q) colide com original (%q) ou preview (%q)", chave, original, preview)
+	}
+}
+
+func TestNovaChaveFormatadoRejeitaIdentificadorNulo(t *testing.T) {
+	t.Parallel()
+
+	// Um termo por caso: nulo no documento e nulo no ruleset são guardas
+	// diferentes, e uma decisão composta exige caso por termo (regra 12).
+	casos := []struct {
+		nome                  string
+		documento, rulesetUID uuid.UUID
+	}{
+		{nome: "documento nulo", documento: uuid.Nil, rulesetUID: uuid.MustParse(rulesetFixoDeTeste)},
+		{nome: "ruleset nulo", documento: uuid.MustParse(idFixoDeTeste), rulesetUID: uuid.Nil},
+		{nome: "os dois nulos", documento: uuid.Nil, rulesetUID: uuid.Nil},
+	}
+
+	for _, caso := range casos {
+		t.Run(caso.nome, func(t *testing.T) {
+			t.Parallel()
+
+			chave, err := NovaChaveFormatado(caso.documento, caso.rulesetUID)
+			exigirErroDeValidacao(t, err)
+			if !chave.Vazia() {
+				t.Fatalf("recusa não pode devolver chave utilizável, obteve %q", chave)
+			}
+		})
+	}
+}
+
+func TestParaChaveStorageAceitaOFormatadoERecusaNearMisses(t *testing.T) {
+	t.Parallel()
+
+	documento := uuid.MustParse(idFixoDeTeste)
+	perfil := uuid.MustParse(rulesetFixoDeTeste)
+	chave, err := NovaChaveFormatado(documento, perfil)
+	if err != nil {
+		t.Fatalf("não esperava erro ao montar a chave formatada, obteve %v", err)
+	}
+
+	// Round-trip: sem isto o artefato é ilegível para quem relê a chave do
+	// banco (data/postgres/documento.go:222).
+	convertida, err := ParaChaveStorage(chave.String())
+	if err != nil {
+		t.Fatalf("round-trip do formatado recusado: %v", err)
+	}
+	if convertida != chave {
+		t.Fatalf("round-trip devolveu %q, esperava %q", convertida, chave)
+	}
+
+	prefixoDoc := "documentos/" + documento.String() + "/"
+	semHifen := strings.ReplaceAll(perfil.String(), "-", "")
+
+	// Alargar segueGramaticaCanonica é afrouxar um validador de espaço de
+	// chaves: provar que ele segue ESTRITO importa tanto quanto provar que a
+	// forma nova passa.
+	casos := []struct {
+		nome  string
+		valor string
+	}{
+		{nome: "ruleset em maiúsculas", valor: prefixoDoc + "formatado-" + strings.ToUpper(perfil.String()) + ".docx"},
+		{nome: "ruleset sem hífen", valor: prefixoDoc + "formatado-" + semHifen + ".docx"},
+		{nome: "ruleset em urn:uuid:", valor: prefixoDoc + "formatado-urn:uuid:" + perfil.String() + ".docx"},
+		{nome: "ruleset entre chaves", valor: prefixoDoc + "formatado-{" + perfil.String() + "}.docx"},
+		// uuid.Nil: endereço LEGÍVEL que nenhum construtor produz. Sem este
+		// caso, a assimetria construtor/parser volta.
+		{nome: "ruleset nulo", valor: prefixoDoc + "formatado-" + uuid.Nil.String() + ".docx"},
+		{nome: "ruleset ausente", valor: prefixoDoc + "formatado-.docx"},
+		{nome: "sem o separador do prefixo", valor: prefixoDoc + "formatado" + perfil.String() + ".docx"},
+		{nome: "prefixo no feminino", valor: prefixoDoc + "formatada-" + perfil.String() + ".docx"},
+		{nome: "prefixo com sublinhado", valor: prefixoDoc + "formatado_" + perfil.String() + ".docx"},
+		{nome: "extensão pdf", valor: prefixoDoc + "formatado-" + perfil.String() + ".pdf"},
+		{nome: "extensão tex", valor: prefixoDoc + "formatado-" + perfil.String() + ".tex"},
+		{nome: "sem extensão", valor: prefixoDoc + "formatado-" + perfil.String()},
+		{nome: "quatro segmentos com o formatado no fim", valor: prefixoDoc + "v2/formatado-" + perfil.String() + ".docx"},
+		{nome: "quatro segmentos com o formatado no meio", valor: prefixoDoc + "formatado-" + perfil.String() + "/saida.docx"},
+		{nome: "travessia no lugar do ruleset", valor: prefixoDoc + "../formatado-" + perfil.String() + ".docx"},
+		{nome: "travessia no lugar do documento", valor: "documentos/../formatado-" + perfil.String() + ".docx"},
+		{nome: "documento nulo com formatado válido", valor: "documentos/" + uuid.Nil.String() + "/formatado-" + perfil.String() + ".docx"},
+	}
+
+	for _, caso := range casos {
+		t.Run(caso.nome, func(t *testing.T) {
+			t.Parallel()
+
+			obtida, err := ParaChaveStorage(caso.valor)
+			if err == nil {
+				t.Fatalf("esperava recusa para %q", caso.nome)
+			}
+			var invalido *errors.ErroValidacao
+			if !errors.Como(err, &invalido) {
+				t.Fatalf("esperava *ErroValidacao, obteve %T", err)
+			}
+			exigirCampo(t, invalido, "chave_storage")
+			if !obtida.Vazia() {
+				t.Fatalf("recusa não pode devolver chave utilizável, obteve %q", obtida)
+			}
+		})
+	}
+}

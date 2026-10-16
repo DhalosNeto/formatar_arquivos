@@ -80,7 +80,7 @@ func TestCorrecaoEstruturaHTTP(t *testing.T) {
 			aplicacao, err := webservices.NovoServicoEstrutura(dominio)
 			require.NoError(t, err)
 			servidor := echo.New()
-			rotas.AplicarEmEcho(servidor, Roteador(NovoControlador(nil, nil, aplicacao), 1<<20), "/v1")
+			rotas.AplicarEmEcho(servidor, Roteador(NovoControlador(nil, nil, aplicacao, nil), 1<<20), "/v1")
 			requisicao := httptest.NewRequestWithContext(t.Context(), http.MethodPatch, "/v1/documentos/"+documento.ID.String()+"/estrutura", strings.NewReader(caso.corpo))
 			requisicao.Header.Set("Content-Type", "application/json")
 			if caso.cookie != "" {

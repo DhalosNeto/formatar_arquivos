@@ -55,6 +55,16 @@ func (s *ServicoInterno) IniciarAnalise(ctx context.Context, id uuid.UUID) (enti
 	return s.transitarStatus(ctx, id, (*entity.Documento).IniciarAnalise)
 }
 
+// IniciarFormatacao move o documento para formatando.
+func (s *ServicoInterno) IniciarFormatacao(ctx context.Context, id uuid.UUID) (entity.Documento, error) {
+	return s.transitarStatus(ctx, id, (*entity.Documento).IniciarFormatacao)
+}
+
+// ConcluirFormatacao move o documento para formatado.
+func (s *ServicoInterno) ConcluirFormatacao(ctx context.Context, id uuid.UUID) (entity.Documento, error) {
+	return s.transitarStatus(ctx, id, (*entity.Documento).ConcluirFormatacao)
+}
+
 // MarcarFalha move o documento para falhou.
 func (s *ServicoInterno) MarcarFalha(ctx context.Context, id uuid.UUID) (entity.Documento, error) {
 	return s.transitarStatus(ctx, id, (*entity.Documento).MarcarFalha)

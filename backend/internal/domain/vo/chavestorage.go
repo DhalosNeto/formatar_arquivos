@@ -30,6 +30,16 @@ const (
 	arquivoOriginalLaTeX = "original." + string(FormatoLaTeX)
 )
 
+// Nome do artefato formatado: prefixo literal, rulesetID canônico e extensão
+// fixa. A saída do motor é sempre .docx (o PDF é conversão posterior), então
+// não há parâmetro de formato — uma chave formatado-<id>.pdf seria recusada
+// por ParaChaveStorage e a falha só apareceria no download.
+const (
+	prefixoArquivoFormatado = "formatado-"
+	sufixoArquivoFormatado  = "." + string(FormatoDocx)
+	mensagemRulesetInvalido = "identificador do ruleset é obrigatório"
+)
+
 // Separadores de linha Unicode: não são controles nem formatação para o
 // unicode, mas quebram linha em log e em arquivo de texto.
 const (
@@ -78,6 +88,36 @@ func NovaChavePreviewPDF(documentoID uuid.UUID) (ChaveStorage, error) {
 	return montarChave(documentoID, arquivoPreviewPDF), nil
 }
 
+// NovaChaveFormatado monta a chave do artefato produzido pelo motor para um
+// perfil. O rulesetID entra na chave, e NÃO o jobID: transicoesValidas permite
+// formatado -> formatando justamente para o usuário trocar de perfil, e uma
+// chave derivada só do documentoID faria o job do perfil Y sobrescrever os
+// bytes do perfil X. Chavear por perfil, e não por job, limita o espaço de
+// objetos ao número de perfis distintos — por job, cada reformatação criaria
+// objeto novo que ninguém apaga.
+//
+// LIMITAÇÃO RESIDUAL: os bytes dependem também do CDM, e formatado ->
+// analisando é transição válida. Formatar com o perfil X, reanalisar e
+// formatar de novo com X reescreve a MESMA chave com bytes diferentes, e o
+// Resultado do job antigo passa a apontar para os bytes mais novos. Chavear
+// também por hash do CDM resolveria e é desproporcional aqui.
+//
+// A versão do perfil não entra: rulesetID já é único por (slug, versao).
+func NovaChaveFormatado(documentoID, rulesetID uuid.UUID) (ChaveStorage, error) {
+	invalidos := &errors.ErroValidacao{Mensagem: mensagemChaveInvalida}
+	if documentoID == uuid.Nil {
+		invalidos.Acrescentar("documento_id", mensagemDocumentoInvalido)
+	}
+	if rulesetID == uuid.Nil {
+		invalidos.Acrescentar("ruleset_id", mensagemRulesetInvalido)
+	}
+	if invalidos.TemCampos() {
+		return "", invalidos
+	}
+
+	return montarChave(documentoID, prefixoArquivoFormatado+rulesetID.String()+sufixoArquivoFormatado), nil
+}
+
 func montarChave(documentoID uuid.UUID, arquivo string) ChaveStorage {
 	return ChaveStorage(prefixoDocumentos + separadorChave + documentoID.String() + separadorChave + arquivo)
 }
@@ -110,9 +150,26 @@ func segueGramaticaCanonica(valor string) bool {
 	switch segmentos[2] {
 	case arquivoOriginalDocx, arquivoOriginalPDF, arquivoOriginalLaTeX, arquivoPreviewPDF:
 		return true
-	default:
+	}
+	return ehArquivoFormatadoCanonico(segmentos[2])
+}
+
+// ehArquivoFormatadoCanonico aceita a única forma com padrão do espaço de
+// chaves: formatado-<rulesetID>.docx. O afrouxamento é deliberado e limitado —
+// prefixo literal, UUID em grafia canônica e extensão fixa —, e uuid.Nil é
+// recusado como no segmento do documentoID: ParaChaveStorage não pode aceitar
+// endereço que nenhum construtor produz.
+func ehArquivoFormatadoCanonico(arquivo string) bool {
+	miolo, temPrefixo := strings.CutPrefix(arquivo, prefixoArquivoFormatado)
+	if !temPrefixo {
 		return false
 	}
+	miolo, temSufixo := strings.CutSuffix(miolo, sufixoArquivoFormatado)
+	if !temSufixo {
+		return false
+	}
+	rulesetID, err := uuid.Parse(miolo)
+	return err == nil && rulesetID != uuid.Nil && miolo == rulesetID.String()
 }
 
 // MotivoChaveInsegura aplica a regra de segurança do espaço de chaves, sem

@@ -1,97 +1,79 @@
 # Retomada
 
-Atualizado em 08/10/2026. Recorte `f3-gate-ruleset-inativo` **concluído**:
-4 contratos, 15 critérios, V1/V2/V3 todos `passou`, integração EXECUTADA.
-
-**COMMITADO.** Branch `f3-motor-e-gate-de-ruleset`, commit `f090cc2`, 96
-arquivos, a partir de `main` em `5d106fb`. A árvore está LIMPA — as instruções
-anteriores de "preservar árvore suja" não valem mais. Nada foi enviado; não há
-push nem PR. A `docs/spec-ativa.json` passou a ser rastreada neste commit, então
-de agora em diante suas versões anteriores SÃO recuperáveis pelo Git.
-
-Um commit só, por decisão do usuário: não era possível separar por recorte
-porque `domain/ruleset/repository/ruleset.go` contém a interface do recorte
-anterior e a correção de comentário deste, e dividir exigiria `git add -p`
-interativo. Excluir arquivos como `cdm/fallback.go` quebraria a compilação. O
-fallback Jev entrou junto por isso — segue experimental e desligado por padrão.
-
-Estado commitado reverificado: `go build`, `go vet`, `gofmt -l .` PASS e
-`go test ./... -race -count=1` exit 0.
+Atualizado em 15/10/2026. Recorte `f3-ruleset-campos-silentes` **CONCLUÍDO**.
+A **engenharia da F3 está completa** e existe o primeiro perfil normativo real.
 
 ## O que ficou pronto
 
-`TipoJob.ValidarRulesetParaNovoJob(ativo *bool)` em `entity/tipo.go` e o gate
-em `InserirOuObter` (`data/postgres/job.go`). Job NOVO que exige ruleset precisa
-de perfil existente e ativo; ausente e inativo devolvem erro IDÊNTICO em
-`ruleset_id`. Repetição de chave vence o gate. Ordem no código: `SET LOCAL
-lock_timeout` → `FOR SHARE` em `documentos` → gate → INSERT → releitura.
+`ruleset.Corpo` tem cinco campos opcionais (ponteiro, `omitempty` em json e
+yaml): `Fonte`, `Alinhamento`, `RecuoCM`, `EspacoAntesPT`, `EspacoDepoisPT`.
+`nil` = a norma é silente, preserve o documento. `AplicarPlano` pula o mutador
+correspondente; `AplicarTipografia` recebe `*string` e com `nil` grava só
+`w:sz`/`w:szCs`, preservando o `w:rFonts`.
 
-A implementação ficou **mais barata que o contrato original**: o gate roda
-primeiro e só consulta a chave quando reprova, então o caminho feliz não paga
-query extra. Foi por isso que reescrever o contrato do adaptador como
-INVARIANTES em vez de ordem de queries valeu a pena.
+`backend/rulesets/abnt-14724/v1.yaml` — primeiro perfil normativo, da ABNT NBR
+14724:2024 que o usuário forneceu em PDF. Cada valor com seção citada: A4
+21 × 29,7 e margens 3/2/3/2 de §5.1, corpo 12 de §5.1, entrelinha 1,5 de §5.2.
+As cinco chaves silentes **ausentes**, com o motivo em comentário.
 
-Ciclo: spec → pré-auditoria (2 rodadas, arquitetura e segurança) → RED
-executado → código → V1/V2/V3 → revisão do delta (segurança APROVA;
-arquitetura APROVA COM CORREÇÕES, 1 bloqueante) → correção → fechamento.
+**Evidência em 15/10 21:52:** gates PASS, lint 0 issues, suíte global `-race`
+exit 0 com 34 pacotes, integração com Podman ok (`data/postgres` 18.375s,
+`infra/fila` 18.394s). Reverificado depois das duas correções de comentário.
 
-## Evidência de 08/10, reproduzida pelo principal
+## O que falta para a F3 fechar DE FATO
 
-- build/vet/vet-integration/gofmt PASS; `golangci-lint run ./...` 0 issues;
-  `go test ./... -race -count=1` exit 0, 34 pacotes, nenhum FAIL/race.
-- Integração com Podman: `-race` exit 0 em 19.265s. O teste de modo de lock
-  (`TestInserirOuObterGateDePerfilUsaForShare`) levou 0,23s, coerente com o
-  deadline de 200 ms disparando — **a prova de lock executou**, não ficou só
-  escrita.
-- Shuffle: ok com a seed que ANTES falhava (1791499507274547732) e com seed
-  aleatória. Comando de integração desta máquina:
-  `env DOCKER_HOST=unix:///run/user/1000/podman/podman.sock MIGRACOES_REDE_CONTAINER=slirp4netns TESTCONTAINERS_RYUK_DISABLED=true go test ./internal/data/postgres -tags integration -race -count=1`
+A engenharia está pronta, mas o perfil cobre só **§5.1 e §5.2** no que o motor
+sabe aplicar — margens, corpo e entrelinha. Faltam, por ordem de valor:
 
-## Quatro erros deste recorte, para não repetir
+1. **Exceções de espaçamento simples da §5.2** (citação longa, nota, referência,
+   legenda): dependem de o CDM classificar esses papéis e de **mutadores por
+   papel**, que não existem. É o maior buraco de conformidade real.
+2. **NBR 10520** (citações) e **NBR 6023** (referências), a que a 14724 remete
+   em §5.5 e §5.4. As tabelas na skill `normas-abnt` seguem **vazias** — exigem
+   a fonte oficial de cada uma, como a 14724 exigiu.
+3. **Numeração de página** (§5.3): exige mutar cabeçalho, que o motor não toca.
+4. **Filete de 5 cm e fonte menor da nota de rodapé** (§5.2.1).
 
-1. **Justificativa factual errada aceita por leitura.** Escrevi que "inserir e
-   validar depois" exigiria `SAVEPOINT`; falso, ele só serve para CONTINUAR a
-   transação. Pior: exigi prova para a afirmação do `FOR SHARE` e aceitei essa
-   por leitura no mesmo parágrafo. O motivo real é de lock, e o RED o provou.
-2. **Duas afirmações INFALSIFICÁVEIS** na spec ("análise e preview não pagam
-   query alguma", "sem query ao catálogo"), repetindo um erro que a auditoria
-   já tinha me corrigido em outro critério na rodada anterior.
-3. **Terceiro comentário mentiroso, num comentário que eu dicteti.** Mandei
-   dizer que "o contexto vence antes do lock_timeout" — verdade só no teste, que
-   usa deadline de 200 ms de propósito; em produção não há prazo por requisição.
-   Este recorte tinha DOIS contratos (C3, C4) existindo só para consertar
-   comentários falsos, e produziu um terceiro.
-4. **Teste dependente de ordem.** A pré-condição global de catálogo vazio
-   passava por sorte alfabética. `-shuffle=on` derruba. Vale rodar shuffle ao
-   fechar recorte que toque integração.
+## Erro de processo registrado, para não repetir
 
-## Próximo recorte
+Este recorte foi pré-auditado só pela arquitetura, com a justificativa de que
+não havia superfície HTTP nova. A segurança apontou que isso é errado: **"sem
+superfície HTTP nova" não equivale a "sem mudança no conjunto de entradas
+aceitas"**. O recorte alterou a alcançabilidade de um validador de fronteira
+(`validarAlvoTipografia`) e um contrato de serialização amarrado a teste de
+imutabilidade. O resultado é sólido, mas por sorte de execução.
+**Regra daqui em diante: mudança em validador de fronteira ou em contrato de
+serialização chama segurança, mesmo sem rota nova.**
 
-Branch `TipoFormatar` no executor. Precisa:
+## Débitos abertos
 
-1. Campo de resultado no `Documento` + migration (hoje só `ChaveStorage` e
-   `ChaveStoragePDF`).
-2. Branch em `fila/executor.go:93`, que hoje cai em "tipo de job não suportado",
-   usando `RulesetsConsulta().ObterPorID` + `Planejar` + `AplicarPlano`.
-3. **Takedown**, que este gate NÃO resolve: job pendente criado antes da
-   desativação segue executável, `Reenfileirar` o devolve para pendente e
-   `Reivindicar` não consulta `rulesets`. A porta já devolve o flag `ativo` e
-   nenhum Go o consome.
-4. **Aí sim** `context.Context` nos sete mutadores OOXML, com teste real de
-   cancelamento, e o single-parse do `document.xml`.
-5. Prazo por requisição no caminho HTTP — sem ele, `lock_timeout` de 3s é o teto
-   e dez requisições presas esgotam o pool de 10.
+Completos em `docs/estado-do-backend.md`, seção "Medição de 15/10". Os que mais
+importam:
 
-Débitos completos em `docs/estado-do-backend.md`, seções de 08/10. Os que mais
-importam: reprodutibilidade do ruleset SEM LASTRO até o checksum ser verificado;
-SSRF em `Fonte`; `RulesetsConsulta()` sem consumidor de produção (código morto se
-o dono não entregar o consumidor); e o buraco do gate de lint, que roda
-`golangci-lint` sem a tag `integration`.
+- **Mutação que sobrevive:** `definicao.go:224-231` reporta campo `"corpo"` para
+  `EspacoAntesPT` e `EspacoDepoisPT`, não `corpo.espaco_antes`/`_depois`, e A1
+  codifica isso — **trocar os dois campos entre si não seria detectado por teste
+  algum**. Corrigir exige mudar produção e um critério que hoje passa.
+- Perda permanente do par (documento, perfil) após qualquer falha do worker;
+  recuperação exige caso de uso de reenfileiramento **escopado ao dono**.
+- Job em `executando` sem lease nem reclaim.
+- Procedência do ruleset modelada como URL única, o que não serve para norma
+  técnica — a F6 vai precisar de procedência estruturada.
+- `TamanhoPT` obrigatório embora §5.1 diga "Recomenda-se".
 
-F3 NÃO está concluída. `Planejar`, `AplicarPlano` e `ObterPorID` seguem sem
-chamador de produção, e nenhuma rota cria `TipoFormatar`.
+## Estado do Git
 
-Nenhum agente ou comando ativo.
+Branch `f3-motor-e-gate-de-ruleset`, com push em `bddbd9d`. **TRÊS recortes
+concluídos e verdes NÃO estão commitados** — gate de ruleset inativo, endpoint e
+download, e campos silentes mais o perfil normativo. São o delta não rastreado
+sobre esse commit. `main` intocada em `5d106fb`.
+
+A revisão de segurança delimitou que sua aprovação cobre só os seis arquivos do
+delta nomeado; `fila/executor.go`, `rotas/.../controlador.go`,
+`vo/chavestorage.go`, `webservices/formatacao.go` e `webmodel/documento.go` são
+de recortes anteriores e não foram auditados nesta rodada.
+
+Nenhum agente ativo.
 
 ## Pausa posterior em 08/10 — investigação do gate de criação
 

@@ -8,8 +8,8 @@ import (
 )
 
 // AplicarPlano executa um formatador.Plano sobre o pacote: a página nas seções
-// correntes e, nos ordinais de plano.ReferenciasCorpo, as seis propriedades de
-// corpo. ReferenciasCorpo vazio aplica somente a página.
+// correntes e, nos ordinais de plano.ReferenciasCorpo, as propriedades de
+// corpo que o perfil DECLARA. ReferenciasCorpo vazio aplica somente a página.
 //
 // ATÔMICA: os mutadores rodam sobre uma cópia rasa do documento, com
 // partesSubstituidas clonado, e o mapa só é trocado no receptor depois que
@@ -37,14 +37,26 @@ func (documento *Documento) AplicarPlano(plano formatador.Plano, ausentes Margen
 
 	referencias := plano.ReferenciasCorpo
 	corpo := plano.Corpo
-	etapas := []func() error{
-		func() error { return copia.AplicarAlinhamento(referencias, corpo.Alinhamento) },
-		func() error { return copia.AplicarEntrelinha(referencias, corpo.Entrelinha) },
-		func() error { return copia.AplicarRecuoPrimeiraLinha(referencias, corpo.RecuoCM) },
-		func() error { return copia.AplicarEspacamentoAntes(referencias, corpo.EspacoAntesPT) },
-		func() error { return copia.AplicarEspacamentoDepois(referencias, corpo.EspacoDepoisPT) },
-		func() error { return copia.AplicarTipografia(referencias, corpo.Fonte, corpo.TamanhoPT) },
+	// Campo nil é norma silente: o mutador é PULADO e aquele aspecto do
+	// documento sai preservado byte a byte, o que é o espírito do ADR 0001.
+	// Pular não é falha. Página e entrelinha são normativas e obrigatórias no
+	// schema, então rodam sempre. Os ponteiros aliasam a Definicao e só são
+	// lidos — nunca desreferenciados para escrita.
+	var etapas []func() error
+	if corpo.Alinhamento != nil {
+		etapas = append(etapas, func() error { return copia.AplicarAlinhamento(referencias, *corpo.Alinhamento) })
 	}
+	etapas = append(etapas, func() error { return copia.AplicarEntrelinha(referencias, corpo.Entrelinha) })
+	if corpo.RecuoCM != nil {
+		etapas = append(etapas, func() error { return copia.AplicarRecuoPrimeiraLinha(referencias, *corpo.RecuoCM) })
+	}
+	if corpo.EspacoAntesPT != nil {
+		etapas = append(etapas, func() error { return copia.AplicarEspacamentoAntes(referencias, *corpo.EspacoAntesPT) })
+	}
+	if corpo.EspacoDepoisPT != nil {
+		etapas = append(etapas, func() error { return copia.AplicarEspacamentoDepois(referencias, *corpo.EspacoDepoisPT) })
+	}
+	etapas = append(etapas, func() error { return copia.AplicarTipografia(referencias, corpo.Fonte, corpo.TamanhoPT) })
 	for _, etapa := range etapas {
 		if err := etapa(); err != nil {
 			return err

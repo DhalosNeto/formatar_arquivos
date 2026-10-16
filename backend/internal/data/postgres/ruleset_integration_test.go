@@ -7,20 +7,27 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/daniel-halos/formatador/internal/domain/ruleset"
 	"github.com/daniel-halos/formatador/internal/infra/errors"
+	infraruleset "github.com/daniel-halos/formatador/internal/infra/ruleset"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
+// apontar devolve o endereço de um literal. Nos cinco campos opcionais de
+// Corpo, ponteiro é "a norma diz isto" e nil é "a norma é silente" (C1).
+func apontar[T any](valor T) *T { return &valor }
+
 func perfilSeed() ruleset.Definicao {
-	return ruleset.Definicao{Slug: "teste-" + uuid.NewString(), Versao: 1, Nome: "Perfil sintético 文 😀 ação", Fonte: "https://example.org/perfil", Pagina: ruleset.Pagina{LarguraCM: 20, AlturaCM: 28}, Corpo: ruleset.Corpo{Fonte: "Fonte Sintética", TamanhoPT: 11, Entrelinha: 1.25, Alinhamento: "justificado"}}
+	return ruleset.Definicao{Slug: "teste-" + uuid.NewString(), Versao: 1, Nome: "Perfil sintético 文 😀 ação", Fonte: "https://example.org/perfil", Pagina: ruleset.Pagina{LarguraCM: 20, AlturaCM: 28}, Corpo: ruleset.Corpo{Fonte: apontar("Fonte Sintética"), TamanhoPT: 11, Entrelinha: 1.25, Alinhamento: apontar("justificado")}}
 }
 
 type estadoSeed struct {
@@ -310,9 +317,9 @@ func octetosGravados(t *testing.T, id uuid.UUID) int {
 func perfilSeedCompleto() ruleset.Definicao {
 	perfil := perfilSeed()
 	perfil.Pagina.Margens = ruleset.Margens{SuperiorCM: 3, InferiorCM: 2, EsquerdaCM: 3, DireitaCM: 2}
-	perfil.Corpo.RecuoCM = 1.25
-	perfil.Corpo.EspacoAntesPT = 6
-	perfil.Corpo.EspacoDepoisPT = 12
+	perfil.Corpo.RecuoCM = apontar(1.25)
+	perfil.Corpo.EspacoAntesPT = apontar(6.0)
+	perfil.Corpo.EspacoDepoisPT = apontar(12.0)
 	return perfil
 }
 
@@ -495,4 +502,69 @@ func TestObterRulesetPorIDTetoDeTamanhoNoSQL(t *testing.T) {
 		assert.False(t, errors.Como(err, &validacao))
 		assert.Zero(t, definicao, "payload acima do teto não pode voltar pela porta")
 	})
+}
+
+// ---------------------------------------------------------------------------
+// A15 — os cinco campos silentes atravessam o jsonb como chave AUSENTE
+//
+// Prova que nil não vira {"fonte":null}: se a tag omitempty for esquecida, o
+// jsonb muda, o checksum muda e o re-seed do MESMO v1 bate em ErroConflito
+// contra uma versão imutável (ruleset.go:112-130).
+// ---------------------------------------------------------------------------
+
+func perfilABNT14724(t *testing.T) ruleset.Definicao {
+	t.Helper()
+
+	caminho := filepath.Join("..", "..", "..", "rulesets", "abnt-14724", "v1.yaml")
+	conteudo, err := os.ReadFile(caminho)
+	require.NoError(t, err, "A15: o perfil %s precisa existir", caminho)
+
+	definicao, err := infraruleset.Carregar(conteudo)
+	require.NoError(t, err, "A15: o perfil normativo precisa carregar")
+	require.Nil(t, definicao.Corpo.Fonte, "pré-condição: os cinco campos precisam estar nil")
+	require.Nil(t, definicao.Corpo.Alinhamento)
+	require.Nil(t, definicao.Corpo.RecuoCM)
+	require.Nil(t, definicao.Corpo.EspacoAntesPT)
+	require.Nil(t, definicao.Corpo.EspacoDepoisPT)
+	return definicao
+}
+
+func TestSemearPerfilSilenteRoundTripEReSeedIdempotente(t *testing.T) {
+	ctx := context.Background()
+	perfil := perfilABNT14724(t)
+
+	require.NoError(t, gerente.Rulesets().Semear(ctx, []ruleset.Definicao{perfil}))
+	gravado := lerSeed(t, perfil)
+
+	// O jsonb não pode ter as cinco chaves — nem com valor nulo.
+	var corpo map[string]any
+	require.NoError(t, json.Unmarshal([]byte(gravado.JSON), &corpo))
+	corpoGravado, ok := corpo["corpo"].(map[string]any)
+	require.True(t, ok, "A15: o jsonb precisa ter o objeto corpo")
+	for _, chave := range []string{"fonte", "alinhamento", "recuo_cm", "espaco_antes_pt", "espaco_depois_pt"} {
+		_, presente := corpoGravado[chave]
+		assert.False(t, presente, "A15: %q tem de estar AUSENTE do jsonb, não nulo", chave)
+	}
+	assert.Equal(t, 12.0, corpoGravado["tamanho_pt"])
+	assert.Equal(t, 1.5, corpoGravado["entrelinha"])
+
+	// Round-trip pela porta de leitura.
+	id, err := uuid.Parse(gravado.ID)
+	require.NoError(t, err)
+	// ObterPorID mora em ConsultaRulesetRepo e devolve (definicao, ativo, err).
+	lido, ativo, err := gerente.RulesetsConsulta().ObterPorID(ctx, id)
+	require.NoError(t, err)
+	require.True(t, ativo, "linha recém-semeada tem ativo=true por DEFAULT")
+	assert.Equal(t, perfil, lido, "A15: o round-trip devolve a definição idêntica")
+	assert.Nil(t, lido.Corpo.Fonte, "A15: fonte volta nil, não string vazia")
+	assert.Nil(t, lido.Corpo.Alinhamento)
+	assert.Nil(t, lido.Corpo.RecuoCM, "A15: recuo volta nil, não ponteiro para 0")
+	assert.Nil(t, lido.Corpo.EspacoAntesPT)
+	assert.Nil(t, lido.Corpo.EspacoDepoisPT)
+
+	// Re-seed do MESMO v1: idempotente, sem ErroConflito e sem UPDATE.
+	require.NoError(t, gerente.Rulesets().Semear(ctx, []ruleset.Definicao{perfil}),
+		"A15: re-semear o mesmo v1 não pode conflitar com a versão imutável")
+	assert.Equal(t, gravado, lerSeed(t, perfil), "A15: o re-seed não executa UPDATE")
+	assert.Equal(t, 1, contarSeed(t, perfil.Slug))
 }
