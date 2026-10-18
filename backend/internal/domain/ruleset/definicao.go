@@ -1,9 +1,11 @@
 package ruleset
 
 import (
+	"maps"
 	"math"
 	"net/url"
 	"regexp"
+	"slices"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -24,6 +26,31 @@ type Definicao struct {
 	Fonte  string `json:"fonte" yaml:"fonte"`
 	Pagina Pagina `json:"pagina" yaml:"pagina"`
 	Corpo  Corpo  `json:"corpo" yaml:"corpo"`
+	// EntrelinhaPorPapel é a entrelinha dos papéis de exceção da §5.2,
+	// indexada pelo nome do papel. Chave ausente — e mapa vazio — significa
+	// "a norma é silente, preserve o documento", como nos cinco ponteiros de
+	// Corpo. As chaves aceitas são SOMENTE as de papeisEntrelinha.
+	//
+	// `omitempty` é CONTRATO de imutabilidade, não estilo, pelo mesmo motivo
+	// dos cinco ponteiros de Corpo: inserirRuleset compara definicao=$4::jsonb
+	// e o checksum é sha256 do json.Marshal, então um perfil já semeado que
+	// não declara o campo precisa continuar serializando SEM esta chave.
+	EntrelinhaPorPapel map[string]float64 `json:"entrelinha_por_papel,omitempty" yaml:"entrelinha_por_papel,omitempty"`
+}
+
+// papeisEntrelinha é a lista branca de papéis que podem receber entrelinha
+// própria: os quatro de exceção da ABNT NBR 14724:2024 §5.2.
+//
+// Lista LITERAL aqui, e não delegação a cdm.ParaPapel. Delegar aceitaria
+// "paragrafo", cujo grupo seria idêntico a Plano.ReferenciasCorpo e produziria
+// duas AplicarEntrelinha sobre os mesmos ordinais, a segunda sobrescrevendo em
+// silêncio; e aceitaria "tabela", que levaria todo ordinal w:tbl ao plano para
+// o mutador recusar, brickando qualquer documento com tabela. Também mantém o
+// domínio sem a aresta ruleset -> cdm e exclui "secao", de que a ordenação
+// determinística dos grupos do plano depende (Secao(1) e Secao(2) têm o mesmo
+// Papel.String()).
+var papeisEntrelinha = map[string]struct{}{
+	"citacao": {}, "referencia": {}, "legenda": {}, "nota_rodape": {},
 }
 
 // Pagina são as dimensões e margens da página, em centímetros.
@@ -82,7 +109,38 @@ func (definicao Definicao) Validar() error {
 	if err := definicao.Pagina.validar(); err != nil {
 		return err
 	}
-	return definicao.Corpo.validar()
+	if err := definicao.Corpo.validar(); err != nil {
+		return err
+	}
+	return definicao.validarEntrelinhaPorPapel()
+}
+
+// validarEntrelinhaPorPapel confere a lista branca e depois as medidas, em
+// DUAS passadas sobre as chaves ORDENADAS.
+//
+// A ordem e a separação das passadas são o que torna a mensagem de erro
+// determinística: com dois defeitos coexistindo — por exemplo
+// {"paragrafo": 1.0, "citacao": 0} — um único `range` devolveria o campo
+// "entrelinha_por_papel" ou "corpo" conforme a ordem de iteração do mapa, e
+// isso seria indeterminismo observável no 400 da API.
+//
+// A medida inválida sai com o campo "corpo", herdado de ValidarEntrelinha, e
+// não com "entrelinha_por_papel": é duplicação de validador que não se faz, ao
+// custo de uma mensagem enganosa para quem consome o 400 — registrado em
+// docs/contrato-api.md.
+func (definicao Definicao) validarEntrelinhaPorPapel() error {
+	chaves := slices.Sorted(maps.Keys(definicao.EntrelinhaPorPapel))
+	for _, chave := range chaves {
+		if _, aceita := papeisEntrelinha[chave]; !aceita {
+			return invalido("entrelinha_por_papel")
+		}
+	}
+	for _, chave := range chaves {
+		if err := ValidarEntrelinha(definicao.EntrelinhaPorPapel[chave]); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (definicao Definicao) validarMetadados() error {

@@ -339,6 +339,18 @@ A gravação compara o CDM lido pelo servidor com o persistido. Em **409**,
 busque a estrutura novamente. Isso não detecta formulários antigos no navegador:
 o contrato ainda não oferece revisão/ETag enviada pelo cliente.
 
+**`tabela` não é aceito, nem como origem nem como destino da correção.** O papel
+`tabela` é derivado da forma do nó XML (`w:tbl`), não de palpite, então corrigir
+um bloco *para* `tabela` ou *a partir de* `tabela` devolve **400** com
+`razoes: ["papel: ..."]`. A recusa existe porque o motor de formatação só sabe
+mutar parágrafo: um bloco de tabela marcado como papel de texto faz a formatação
+falhar, e a falha trava aquele par (documento, perfil) de forma permanente —
+ver "O que ainda não existe".
+
+Consequência para a tela: se a estrutura detectada marcou como tabela algo que o
+autor considera texto (ou o contrário), **não há correção pela API**. O caminho é
+ajustar o documento e reenviar.
+
 ### `GET /v1/jobs/{id}`
 
 Consulta o processamento de um documento da sessão. **200** retorna o mesmo

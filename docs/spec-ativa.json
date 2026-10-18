@@ -1,26 +1,36 @@
 {
   "versao": 1,
-  "id": "f3-cdm-classifica-citacao",
+  "id": "f3-mutadores-por-papel",
   "estado": "concluida",
-  "objetivo": "Fazer o CDM classificar citação em bloco como cdm.Citacao — papel declarado e NUNCA atribuído — a partir de EVIDÊNCIA no documento (estilo nomeado e recuo à esquerda), e impedir que a inferência por região da camada 2 apague essa classificação. Habilita a exceção de espaçamento simples da §5.2 da ABNT NBR 14724:2024 no recorte seguinte.",
+  "objetivo": "Habilitar entrelinha por papel no motor: o ruleset passa a poder declarar entrelinha_por_papel para os quatro papeis de excecao da §5.2 (citacao, referencia, legenda, nota_rodape), Planejar separa os blocos autorizados em grupos proprios e AplicarPlano aplica a medida de cada grupo. Mutar exige origem autorizada (OrigemEstiloDocx ou OrigemUsuario); deteccao por recuo, por regiao, por regra textual e palpite de LLM nunca autorizam. O recorte NAO entrega a §5.2 aplicada: com a classificacao de hoje o piso alcanca automaticamente apenas Citacao por estilo nomeado; Referencia (regiao, 0,6), Legenda (regra textual, 0,8) e NotaRodape (nunca produzida, pois RefXML endereca filhos diretos de w:body e nota vive em word/footnotes.xml) so chegam ao motor por confirmacao humana via PATCH /v1/documentos/{id}/estrutura. Nenhum perfil semeado muda: abnt-14724/v1.yaml segue imutavel e o v2.yaml com a §5.2 fica para o recorte seguinte, logo a entrega e observavel por teste, nao na saida de producao. O recorte tambem fecha na raiz um brick VIVO no codigo empurrado: hoje PATCH de estrutura aceita marcar o ordinal de um w:tbl como paragrafo, o bloco entra em ReferenciasCorpo e o mutador recusa o alvo, travando permanentemente o par (documento, perfil). Para que essa guarda seja correta, o recorte veda antes as fontes nao estruturais de cdm.Tabela no fallback de LLM, tornando verdadeira a invariante Tabela <=> w:tbl.",
   "fora_escopo": [
-    "HEURÍSTICA DE ASPAS MAIS TAMANHO: RETIRADA do recorte, não adiada por falta de tempo. A versão anterior desta spec a tinha como sinal primário, com a justificativa de que 'bloco autônomo entre aspas é citação longa'. As duas auditorias mostraram que a premissa está INVERTIDA — aspas evidenciam CITAÇÃO, não EXTENSÃO, e a citação longa é convencionalmente apresentada SEM aspas, logo o sinal erraria 100% das citações longas já formatadas e pegaria epígrafe, diálogo e título de obra. O termo que carregaria a extensão seria um limiar de runas sem fonte normativa, porque a norma condiciona a 'mais de três linhas', propriedade de renderização. Decisão: classificar só onde há evidência, e não inferir extensão.",
-    "cdm.NotaRodape: ESTRUTURALMENTE inalcançável e confirmado pelas duas auditorias. RefXML é o ordinal entre filhos de w:body (cdm/bloco.go:97-105) e lerCorpo só consome filhos de w:body (ooxml/blocos.go:94-123); nota de rodapé vive em word/footnotes.xml, que o motor não abre e que NENHUM dos dois fixtures tem. Classificá-la exigiria RefXML identificar (parte, ordinal), mudando a identidade do CDM e atingindo cdm_jsonb já persistido. Recorte próprio e maior.",
-    "Aplicar formatação a Citacao: este recorte só CLASSIFICA. O espaço simples da §5.2 vem no recorte dos mutadores por papel.",
-    "Recuo de 4 cm e corpo menor da citação longa: são da NBR 10520, cuja tabela na skill está VAZIA. Este recorte usa recuo como SINAL DE DETECÇÃO, e não afirma valor normativo algum.",
-    "cdm.ItemLista, Tabela, Figura, Equacao e ListaAutores, também declarados e nunca atribuídos."
+    "Criar backend/rulesets/abnt-14724/v2.yaml ou qualquer perfil novo",
+    "Editar backend/rulesets/abnt-14724/v1.yaml, que e imutavel por ja estar semeado",
+    "Outras propriedades por papel: fonte menor, recuo, espaco antes/depois, filete de 5 cm da nota (§5.2.1) e numeracao de pagina (§5.3)",
+    "Classificar Referencia, Legenda ou NotaRodape por evidencia nova, ou tocar word/footnotes.xml",
+    "Mudar o piso de consulta ao LLM, a heuristica de regiao ou a lista de estilos nomeados",
+    "Migrar CDM ja persistido, dar bump em VersaoFormatoCDM ou reparar linhas gravadas antes deste recorte",
+    "Lease, deadline ou reenfileiramento de job travado (F7), e teto de passes de parsing por job",
+    "Alterar o contrato HTTP, migrations ou a porta de dados"
   ],
   "fontes": [
-    ".agents/skills/spec-verificavel/SKILL.md",
-    ".agents/skills/normas-abnt/SKILL.md",
-    ".agents/skills/ooxml-referencia/SKILL.md",
     "CLAUDE.md",
+    "docs/retomada.md",
+    "docs/plano-backend.md",
+    "docs/estado-do-backend.md",
+    ".agents/skills/normas-abnt/SKILL.md",
+    "backend/internal/domain/formatador/plano.go",
     "backend/internal/domain/cdm/bloco.go",
-    "backend/internal/domain/cdm/papel.go",
     "backend/internal/domain/cdm/heuristica.go",
     "backend/internal/domain/cdm/fallback.go",
+    "backend/internal/domain/documento/service/estrutura.go",
+    "backend/internal/domain/ruleset/definicao.go",
     "backend/internal/infra/ooxml/blocos.go",
-    "backend/internal/infra/config/jev.go"
+    "backend/internal/infra/ooxml/formatar.go",
+    "backend/internal/infra/ooxml/entrelinha.go",
+    "backend/internal/infra/ruleset/carregar.go",
+    "backend/rulesets/_schema.json",
+    "backend/internal/infra/ooxml/pacote.go"
   ],
   "arquivos": [
     {
@@ -34,24 +44,9 @@
       "responsavel": "testador"
     },
     {
-      "caminho": "backend/internal/infra/ooxml/heuristica_integrada_test.go",
-      "acao": "alterar",
-      "responsavel": "testador"
-    },
-    {
-      "caminho": "backend/internal/domain/cdm/heuristica.go",
+      "caminho": "backend/internal/domain/cdm/bloco.go",
       "acao": "alterar",
       "responsavel": "codador"
-    },
-    {
-      "caminho": "backend/internal/domain/cdm/heuristica_test.go",
-      "acao": "alterar",
-      "responsavel": "testador"
-    },
-    {
-      "caminho": "docs/estado-do-backend.md",
-      "acao": "alterar",
-      "responsavel": "principal"
     },
     {
       "caminho": "backend/internal/domain/cdm/fallback_test.go",
@@ -59,203 +54,312 @@
       "responsavel": "testador"
     },
     {
+      "caminho": "backend/internal/domain/cdm/heuristica_test.go",
+      "acao": "alterar",
+      "responsavel": "testador"
+    },
+    {
       "caminho": "backend/internal/domain/cdm/serializacao_test.go",
       "acao": "alterar",
       "responsavel": "testador"
+    },
+    {
+      "caminho": "backend/internal/domain/ruleset/definicao.go",
+      "acao": "alterar",
+      "responsavel": "codador"
+    },
+    {
+      "caminho": "backend/internal/domain/ruleset/definicao_test.go",
+      "acao": "alterar",
+      "responsavel": "testador"
+    },
+    {
+      "caminho": "backend/rulesets/_schema.json",
+      "acao": "alterar",
+      "responsavel": "codador"
+    },
+    {
+      "caminho": "backend/internal/infra/ruleset/carregar_test.go",
+      "acao": "alterar",
+      "responsavel": "testador"
+    },
+    {
+      "caminho": "backend/internal/domain/formatador/plano.go",
+      "acao": "alterar",
+      "responsavel": "codador"
+    },
+    {
+      "caminho": "backend/internal/domain/formatador/plano_test.go",
+      "acao": "alterar",
+      "responsavel": "testador"
+    },
+    {
+      "caminho": "backend/internal/infra/ooxml/formatar.go",
+      "acao": "alterar",
+      "responsavel": "codador"
+    },
+    {
+      "caminho": "backend/internal/infra/ooxml/formatar_test.go",
+      "acao": "alterar",
+      "responsavel": "testador"
+    },
+    {
+      "caminho": "backend/internal/domain/documento/service/estrutura.go",
+      "acao": "alterar",
+      "responsavel": "codador"
+    },
+    {
+      "caminho": "backend/internal/domain/documento/service/estrutura_test.go",
+      "acao": "alterar",
+      "responsavel": "testador"
+    },
+    {
+      "caminho": "backend/rulesets/abnt-14724/v1.yaml",
+      "acao": "ler",
+      "responsavel": "testador"
+    },
+    {
+      "caminho": "backend/internal/domain/cdm/fallback.go",
+      "acao": "alterar",
+      "responsavel": "codador"
+    },
+    {
+      "caminho": "backend/internal/domain/cdm/fallback_limites_test.go",
+      "acao": "alterar",
+      "responsavel": "testador"
+    },
+    {
+      "caminho": "docs/contrato-api.md",
+      "acao": "alterar",
+      "responsavel": "principal"
+    },
+    {
+      "caminho": "docs/plano-backend.md",
+      "acao": "alterar",
+      "responsavel": "principal"
+    },
+    {
+      "caminho": "docs/estado-do-backend.md",
+      "acao": "alterar",
+      "responsavel": "principal"
     }
   ],
   "contratos": [
     {
       "id": "C1",
-      "descricao": "BlocoBruto ganha RecuoEsquerdaTwips int, lido do w:ind do w:pPr do PRÓPRIO parágrafo, com TRÊS guardas. As duas que EstiloNomeado já usa em blocos.go:151 — `tipo == TipoBlocoBrutoParagrafo` e 'primeiro vence' — MAIS UMA TERCEIRA que a spec anterior dizia ser desnecessária e o testador provou que é: IGNORAR A SUBÁRVORE DE w:pPrChange. 'Primeiro vence' NÃO basta, porque se o ÚNICO w:ind do parágrafo vive dentro do w:pPrChange — que guarda as propriedades ANTIGAS de uma revisão rastreada — então 'primeiro vence' devolve justamente o recuo REVOGADO. O caso de A1 é construído sem w:ind corrente de propósito: com um antes, ele seria indistinguível do termo 'primeiro vence' e vacuoso. A guarda de tipo não é zelo: sem ela, um w:ind de parágrafo DENTRO de célula contamina o BlocoBruto do w:tbl. A de 'primeiro vence' também não: sem ela, um w:pPr dentro de w:pPrChange — revisão rastreada, que guarda as propriedades ANTIGAS — faria um recuo REVOGADO classificar Citacao. ATRIBUTOS A LER, e esta lista é MEDIDA: `w:start` ANTES de `w:left`, porque o LibreOffice emite `<w:ind w:start=\"2268\"/>` — reproduzi convertendo um .fodt com fo:margin-left=4cm por soffice --headless, e a versão anterior desta spec lia só `w:left`, logo leria ZERO no produtor alvo, repetindo a classe de erro do portão de `Normal`. `w:leftChars` NÃO é lido: tem precedência sobre left no Word e unidade diferente (centésimos de caractere), então lê-lo como twips daria número sem sentido — bloco que só o tenha fica com 0, e isso é limite declarado. SANEAMENTO: valor não numérico, overflow de strconv ou NEGATIVO (recuo pendente) viram 0, nunca erro e nunca pânico — ST_SignedTwipsMeasure aceita negativo e medida universal como \"4cm\", e nada disso pode virar 'acima do limiar'. atributoW já aceita namespace vazio além do w:."
+      "descricao": "ORIGEM HONESTA NA CAMADA 1 (backend/internal/infra/ooxml/blocos.go + backend/internal/domain/cdm/bloco.go). Hoje ClassificarPorEstiloDocx grava Origem: cdm.OrigemEstiloDocx em TODOS os caminhos, inclusive no bloco que virou cdm.Citacao apenas por bruto.RecuoEsquerdaTwips > limiarRecuoCitacaoTwips com confiancaRecuoCitacao 0,5. Fato medido que CONTRADIZ 'origem declarada pelo documento' como piso: o palpite geometrico de 0,5 seria autorizado. Correcao na raiz: o caminho do recuo passa a gravar cdm.OrigemHeuristica; estilo nomeado (Citao, Blocodecitao, Quote, IntenseQuote, Title, Normal, HeadingN) e w:tbl seguem OrigemEstiloDocx/0,95, e o default sem estilo segue Paragrafo/0,2/OrigemEstiloDocx. A assinatura exportada ClassificarPorEstiloDocx(BlocoBruto) cdm.Bloco NAO muda; origem passa a ser decidida junto do papel (helper interno a cargo do codador). Invariantes preservadas: Confianca do recuo continua 0,5, abaixo de config.LimiteConsulta, e OrigemHeuristica nao entra nas exclusoes de candidato do fallback (fallback.go:87 exclui so Usuario e LLM), logo o bloco segue candidato ao desempate do LLM; cdm.AplicarHeuristica nao o reescreve porque sua guarda C5 exige Papel == Paragrafo. O comentario de cdm.Origem em bloco.go:74 ('QUEM classificou o bloco') e o de ClassificarPorEstiloDocx passam a dizer o que a semantica virou: OrigemEstiloDocx = o documento DECLARA o papel; OrigemHeuristica = palpite automatico, de qualquer camada. Renomear a funcao e sugestao, nao exigencia."
     },
     {
       "id": "C2",
-      "descricao": "Em papelPeloEstilo, estilo nomeado de citação devolve cdm.Citacao com confiancaEstiloConhecido. A LISTA É MEDIDA, NÃO SUPOSTA, e a versão anterior desta spec estava ERRADA: o LibreOffice emite o nome LOCALIZADO com os caracteres não-ASCII DESCARTADOS, não transliterados. Medi convertendo um .fodt com soffice --headless: o estilo 'Citação' saiu como `Citao`, e 'Título 1' como `Ttulo1user`. A auditoria mediu 'Bloco de citação' saindo como `Blocodecitao`. Logo `Citacao` e `Citação` NUNCA chegam do LO. Lista: `Citao`, `Blocodecitao`, `Quote` e `IntenseQuote` (styleIds latent-English do Word, estáveis por locale). `BlockQuote` NÃO entra: nenhuma ferramenta conhecida o emite. REGISTRAR no comentário que a lista é intrinsecamente FRÁGIL, porque o styleId do LO depende do idioma de quem salvou, e que o caminho robusto é o recuo de C3. Comparação exata e sensível a caixa, no idioma dos `Title`/`Normal`/`Heading` que já existem (blocos.go:243-252) — a versão anterior pedia insensível a caixa, inconsistente com o arquivo."
+      "descricao": "RULESET DECLARA A MEDIDA, COM LISTA BRANCA DE PAPEIS (backend/internal/domain/ruleset/definicao.go + backend/rulesets/_schema.json). Campo novo OPCIONAL na Definicao, irmao de Pagina e Corpo, assinatura proposta: EntrelinhaPorPapel map[string]float64 com tag json:\"entrelinha_por_papel,omitempty\" yaml:\"entrelinha_por_papel,omitempty\". As chaves aceitas sao SOMENTE os quatro papeis de excecao da §5.2: \"citacao\", \"referencia\", \"legenda\", \"nota_rodape\". Lista branca literal no pacote ruleset, e NAO delegacao a cdm.ParaPapel: delegar aceitaria \"paragrafo\" (grupo identico a ReferenciasCorpo, que filtra Papel == Paragrafo, destruindo a disjuncao de C3 e produzindo duas chamadas de AplicarEntrelinha sobre os mesmos ordinais, a segunda sobrescrevendo em silencio) e \"tabela\" (todo ordinal w:tbl entraria no plano e o mutador recusaria, brickando qualquer documento com tabela, sem acao humana). A lista branca tambem evita a aresta domain/ruleset -> domain/cdm e exclui \"secao\", de que C3 depende. Valor: multiplicador de linha validado pelo ValidarEntrelinha existente (1.0 vira w:line=240; 1.5 vira 360). Ausencia da chave significa 'a norma e silente, preserve o documento', como nos cinco ponteiros de Corpo; mapa vazio equivale a ausencia. Validar roda apos Corpo.validar() e devolve *errors.ErroValidacao com campo \"entrelinha_por_papel\" para chave fora da lista branca e campo \"corpo\", herdado de ValidarEntrelinha, para medida nao representavel. omitempty e CONTRATO de imutabilidade, nao estilo: inserirRuleset compara definicao=$4::jsonb e o checksum e sha256 do json.Marshal, logo a Definicao lida de abnt-14724/v1.yaml precisa continuar serializando SEM a chave nova. O schema recebe a propriedade NA RAIZ, type object, additionalProperties false, com as quatro propriedades number exclusiveMinimum 0 — a raiz segue additionalProperties false. O schema e o gate real: infra/ruleset/carregar.go decodifica YAML para objeto generico e faz json.Marshal/Unmarshal, entao a tag yaml nao participa da leitura de perfil. O erro de medida invalida sai com campo \"corpo\", herdado de ValidarEntrelinha, e nao com \"entrelinha_por_papel\": aceito de proposito para nao duplicar o validador, e por isso precisa ficar registrado em docs/contrato-api.md, porque e mensagem enganosa para quem consome o 400 no front."
     },
     {
       "id": "C3",
-      "descricao": "Em papelPeloEstilo, RECUO À ESQUERDA acima de limiarRecuoCitacaoTwips = 567 devolve cdm.Citacao. ARITMÉTICA MOSTRADA no comentário, sem invocar a 10520: 1440 twips por polegada dividido por 2,54 dá 566,93 por centímetro, logo 567 é exatamente 1 cm; o corpo de texto dos dois fixtures tem recuo 0, e a convenção de 4 cm fica em 2268, bem acima — então o limiar separa 'recuado de propósito a partir de 1 cm' de 'sem recuo', e pega tanto o recuo modesto quanto o de 4 cm. Número com aritmética é revisável; número mágico não. É o sinal MAIS PRECISO dos dois e o único que pega a citação longa JÁ FORMATADA — que, por convenção, é apresentada sem aspas e por isso seria 100% perdida por qualquer heurística de aspas. O limiar é parâmetro de DETECÇÃO e o comentário tem de dizer isso: a NBR 10520, que fixaria o recuo normativo, NÃO está disponível no projeto (tabela vazia na skill), então o valor é escolha de engenharia para distinguir 'recuado de propósito' de 'sem recuo', e NÃO pode ser apresentado como requisito de norma. Confiança PRÓPRIA, menor que a de estilo nomeado, porque recuo tem outras causas. PORTÃO DERIVADO, não lista literal: o sinal de recuo é consultado quando o estilo NÃO DETERMINOU OUTRO PAPEL — isto é, quando papelPeloEstilo chegaria a Paragrafo, seja por estilo vazio, desconhecido ou `Normal`. Derivar em vez de enumerar (`\"\"`, `Normal`, `BodyText`) evita que o portão deixe de valer em silêncio quando alguém acrescentar um estilo ao switch de blocos.go:243-252 — e `BodyText` hoje já cai em desconhecido. Medi que `Normal` é estilo CONHECIDO em blocos.go:246 com confiança 0.95, e que 47 dos 57 parágrafos de artigo-real-libreoffice.docx o usam: com o portão antigo o sinal NUNCA dispararia no documento LibreOffice, que é o caso de uso alvo. Estilo que determina OUTRO papel (Title, HeadingN, estilo de citação) bloqueia o sinal. LIMITE DECLARADO, e ele é grande: C3 lê recuo DIRETO no w:pPr. Recuo HERDADO de estilo nomeado mora em styles.xml, que ExtrairBlocos não abre — e a citação longa já formatada pelo LibreOffice costuma indentar PELO ESTILO. Na minha medição o LO materializou o w:ind nos dois lugares, mas isso é comportamento dele, não garantia do formato. Quando o recuo vive só no estilo, quem pega é C2, pelo NOME do estilo — e o caso que escapa dos dois é estilo fora da lista cujo recuo vive só em styles.xml."
+      "descricao": "PISO DE AUTORIZACAO E GRUPOS NO PLANO (backend/internal/domain/formatador/plano.go). O piso mora em Planejar, que e a porta de validacao do fluxo e dominio puro (sem ctx, sem I/O); o adaptador nao revalida. Tipo novo proposto: GrupoEntrelinha struct { Papel cdm.Papel; Entrelinha float64; Referencias []int } e campo novo Plano.EntrelinhaPorPapel []GrupoEntrelinha, em vez de map[papel][]int, para que o invariante seja verificavel por igualdade de slice e a saida seja deterministica. Planejar mantem a assinatura (cdm.Indice, ruleset.Definicao) (Plano, error) e os erros das duas fontes sobem como vieram (*ErroValidacao da definicao vira 400; cdm.ErroRefXMLDuplicado segue identificavel por errors.E). Regra: autorizado := bloco.Origem == cdm.OrigemEstiloDocx || bloco.Origem == cdm.OrigemUsuario. Um bloco entra em grupo quando definicao.EntrelinhaPorPapel declara seu Papel E autorizado. Bloco cujo papel esta declarado mas cuja origem nao autoriza fica FORA do plano inteiro — e como ReferenciasCorpo segue exigindo Papel == cdm.Paragrafo, nenhum mutador o alcanca e o paragrafo sai preservado. Invariantes: Referencias de cada grupo em ordem crescente; grupo sem bloco autorizado NAO e emitido; grupos ordenados por Papel.String() crescente, ordenacao que SO e total porque a lista branca de C2 exclui \"secao\" (Secao(1) e Secao(2) tem o mesmo String()) — se alguem ampliar a lista branca, a chave de ordenacao precisa passar a incluir o nivel; conjuntos dois a dois disjuntos e disjuntos de ReferenciasCorpo, agora um teorema: a lista branca de C2 nao contem Paragrafo, um bloco tem um papel so, e Indice.Validar ja proibe RefXML repetido. Plano.Corpo segue aliasando a Definicao e os cinco ponteiros seguem SOMENTE LEITURA; GrupoEntrelinha herda a regra copiando apenas float64 e int."
     },
     {
       "id": "C4",
-      "descricao": "A CONFIANÇA de C3 fica estritamente ABAIXO de LimiteConsulta, cujo default de produção é 0.7 (infra/config/jev.go:26), e acima de confiancaSemEstilo (0.2) — VALOR FIXO 0.5, não faixa: A12 e A14 prometem valor observável, e teste não afere intervalo. A versão anterior dizia só 'abaixo de confiancaEstiloConhecido (0.95)', intervalo que contém 0.8, e com 0.8 o bloco SAIRIA do conjunto de candidatos do fallback (cdm/fallback.go:87 exige Confianca < LimiteConsulta) — isto é, a própria spec permitia eliminar o desempate que ela prometia. Ambas as auditorias pegaram isso de forma independente. A confiança de C2 (estilo nomeado) fica ACIMA do limite de propósito: evidência declarada pelo documento não precisa de desempate."
-    },
-    {
-      "id": "C5",
-      "descricao": "Em cdm.AplicarHeuristica, a inferência por região NÃO rebaixa bloco cujo papel seja DIFERENTE de Paragrafo. UM TERMO SÓ, e a redução vem de contradição interna que o TESTADOR achou depois de três rodadas de auditoria: a versão anterior exigia também `Confianca > confiancaRegiao`, mas C4 fixa a confiança do sinal de recuo em 0.5 e confiancaRegiao é 0.6 (heuristica.go:17) — logo o Citacao vindo de recuo SERIA rebaixado, contradizendo A7, que promete que ele resiste. Pior: com os critérios do recorte, o termo de confiança NÃO TEM NENHUM CASO que falsifique sua remoção (A7 e A8 só exercitam papel não-default, A9 só exercita Paragrafo), ou seja era peso morto e violação da regra 12 dentro da própria spec. O princípio, agora com uma formulação que se sustenta: Paragrafo significa 'nenhum papel determinado', e palpite posicional só PREENCHE bloco sem papel — nunca sobrescreve papel que algo determinou, em qualquer confiança. Confiança é ortogonal a isso: um Citacao de 0.5 é uma determinação, e quem resolve a dúvida é o fallback, que o recebe por estar abaixo de LimiteConsulta. O conserto é GERAL: ehCabecalho(Titulo) também é falso (heuristica.go:132), então um Titulo dentro de região aberta já é sobrescrito hoje, e a regra conserta os dois. VERIFICAÇÃO EMPÍRICA: os blocos 7, 10 e 36-39 de heuristica_integrada_test.go chegam da camada 1 como Paragrafo@0.95 vindo de `Normal` e devem continuar saindo Resumo/Referencia — se a regra incluir confiança, esse teste que passa hoje QUEBRA."
+      "descricao": "EXECUCAO DOS GRUPOS (backend/internal/infra/ooxml/formatar.go). (*Documento).AplicarPlano(formatador.Plano, MargensComplementares) error mantem assinatura e atomicidade. As etapas de grupo sao ACRESCENTADAS AO FIM da lista atual de etapas de corpo, que hoje e, em ordem: AplicarAlinhamento (se declarado), AplicarEntrelinha do corpo, AplicarRecuoPrimeiraLinha, AplicarEspacamentoAntes, AplicarEspacamentoDepois (cada um se declarado) e AplicarTipografia; para cada grupo de plano.EntrelinhaPorPapel entra uma etapa copia.AplicarEntrelinha(grupo.Referencias, grupo.Entrelinha). A posicao no fim e indiferente ao resultado porque os conjuntos sao disjuntos por C3; a redacao fixa a posicao so para o teste ser deterministico. Se qualquer etapa recusar, o receptor nao recebe partesSubstituidas e nem o delta da pagina fica. Grupo recebe SOMENTE entrelinha neste recorte: fonte, tamanho, alinhamento, recuo e espacamento continuam restritos a plano.ReferenciasCorpo, porque nao ha fonte normativa lida para tipografia de citacao. AplicarEntrelinha ja valida a medida e recusa ordinal negativo, repetido na mesma chamada, fora do documento e alvo w:tbl; o plano nao revalida. Sem log de ordinal (regra 7). Lista de grupos vazia ou nil mantem o comportamento atual byte a byte. Custo conhecido: cada grupo reparseia word/document.xml, entao os passes vao de 6 para 6+k, com k vindo do ruleset no git e nao do usuario (BAIXO, registrado, sem teto neste recorte). || QUALIFICACAO que faltava, achado do testador no RED: a frase de que a posicao dos grupos no fim e indiferente ao resultado vale SO para plano vindo de Planejar, porque a disjuncao e teorema de C3. A12 e A18 montam Plano em codigo justamente porque o TIPO admite o que Planejar nunca emite, e nesses casos a posicao IMPORTA — e a premissa do 'grupo valido escreve primeiro' em A18. || LIMITE DECLARADO DE A18, que nao tem assercao possivel de fora do pacote: o vazamento que A18 caca exige que, quando a primeira etapa de grupo escreve, o []byte de word/document.xml em copia.partesSubstituidas ainda seja o mesmo que maps.Clone compartilha com o receptor. Isso so vale porque as etapas anteriores curto-circuitam quando o conteudo nao muda (pagina.go:54 com 'if !mudou || bytes.Equal', alinhamento.go:104, tipografia.go:110), e o teste fixa a pre-condicao carregando Pagina e Corpo IDENTICOS nos dois planos. Se alguma etapa anterior aos grupos passar a substituir a parte INCONDICIONALMENTE, A18 continua verde e deixa de matar o mutante. Quem mexer na ordem ou na condicao de substituicao das etapas de pagina, alinhamento ou tipografia reabre este limite."
     },
     {
       "id": "C6",
-      "descricao": "Em cdm.AplicarHeuristica, proteger o papel de um bloco não desliga a DELIMITAÇÃO dos vizinhos: a região aberta é encerrada por DOIS termos independentes, e bloco de papel determinado continua passando pelos dois. Termo 1: o papel do próprio bloco é cabeçalho (ehCabecalho, ou seja Secao). Termo 2: o TEXTO do bloco casa numeração de seção, qualquer que seja o papel dele. ORIGEM: achado R1 do validador. A guarda de C5, posicionada antes das regras textuais, desligou o termo 2 para todo bloco não-Paragrafo — caso concreto: [Paragrafo \"RESUMO\", Titulo \"1 INTRODUÇÃO\", Paragrafo \"texto\"] fechava a região antes do recorte (o texto dava Secao(1) e ehCabecalho fechava) e passou a deixá-la ABERTA, porque ehCabecalho(Titulo) é falso (heuristica.go:132) — o terceiro bloco saía Resumo@0.6. Nenhum critério de A7 a A16 cobria isso e os fixtures não pegam, porque lá os cabeçalhos vêm de HeadingN e já dão Secao. Isto NÃO reintroduz 'texto manda no papel declarado', que C5 rejeita: o bloco mantém o papel dele intacto e o que o texto afeta é só regiaoAberta, isto é a classificação dos vizinhos. Fechar região é delimitação, não reclassificação. LIMITE DO TERMO 2, achado pelo testador no RED: 'casa numeração de seção' é literal e NÃO é 'casa alguma regra textual'. papelPorRegraTextual também reconhece palavras-chave e legenda, e essas NÃO fecham região — é o que heuristica.go:107 já distingue, porque legenda e palavras-chave aparecem DENTRO de uma região sem encerrá-la. Implementar C6 movendo a guarda de C5 para depois do bloco textual, sem replicar o ehCabecalho(papel) interno, faria 'Tabela 1' passar a fechar região. CORRECAO DE UMA AFIRMACAO FALSA DESTE PROPRIO CONTRATO: a versao anterior dizia que A19 pega isso, e NAO pega. O validador provou por mutacao: trocar ehCabecalho(papelPeloTexto) por `casou` deixa a suite de cdm inteira passando, A19 incluido, porque em A19 o bloco do meio e Paragrafo e portanto NUNCA alcanca esta guarda — A19 cobre o ehCabecalho do ramo textual que ja existia, nao o termo 2 novo. Quem pega e A20: bloco de papel DETERMINADO cujo texto casa regra textual que nao e cabecalho."
+      "descricao": "VEDAR AS FONTES NAO ESTRUTURAIS DE cdm.Tabela (backend/internal/domain/cdm/fallback.go). Duas condicoes em LADOS DIFERENTES, nao uma. (a) LADO DA ESCRITA: julgamento com Papel == cdm.Tabela e recusado em validarJulgamentos (fallback.go:162), ao lado do termo que ja existe (!j.Papel.Valido()), antes de qualquer Reclassificar de fallback.go:129. Reusar o caminho de recusa do lote e deliberado: um classificador que afirma 'este w:p e uma tabela' viola o protocolo, nao esta com confianca baixa, e e assim que resposta malformada ja e tratada hoje. Consequencia aceita: o lote inteiro perde a reclassificacao automatica e cada candidato sai como RevisaoEstrutura com acaoRevisar e motivoRespostaClassificadorInvalida. Recusar so aquele julgamento foi considerado e descartado: exigiria semantica nova de revisao por bloco para fechar o mesmo furo. SEM (a) o termo 1 de C5 defende metade da invariante. A fonte nao e nova: o julgamento Tabela sobre w:p e alcancavel desde antes deste recorte, porque o bloco de recuo ja era candidato com 0,5 e origem nao excluida; C1 apenas troca a origem desse bloco. (b) LADO DO CANDIDATO: o filtro de candidatos (fallback.go:87) passa a exigir tambem bloco.Papel != cdm.Tabela. Fecha o residual de configuracao: JEV_LIMITE_CONSULTA acima de 0,95 torna um bloco w:tbl (Tabela/0,95/OrigemEstiloDocx) candidato, e o LLM poderia marca-lo Paragrafo/OrigemLLM, que entra em ReferenciasCorpo SEM passar por C5. INVARIANTE Tabela <=> w:tbl, SUSTENTADA POR CONSTRUCAO, nao por verificacao em runtime. Nao ha check de runtime barato: Planejar e dominio puro e nao ve o XML, e o unico ponto de runtime existente e a recusa do mutador no fim do fluxo, cujo custo e justamente o brick que C5 e C6 evitam; comparar ordinais Tabela do CDM com os w:tbl do pacote exigiria passe novo no executor, fora deste recorte. Os quatro escritores de Papel, para quem acrescentar o quinto saber o que quebra: 1) ClassificarPorEstiloDocx, que emite Tabela SO por bruto.Tipo == TipoBlocoBrutoTabela (forma do no w:tbl); 2) papelDoEstiloNomeado, que nao tem caso Tabela em nenhum estilo; 3) AplicarHeuristica, que nunca emite Tabela ('Tabela 1 — ...' vira Legenda); 4) Fallback.Aplicar via Reclassificar, vedado por (a) e (b). Mais o passthrough Desserializar, que so reproduz o que alguem gravou, e nao existe seed de CDM nem codigo de migracao."
+    },
+    {
+      "id": "C5",
+      "descricao": "FECHAR O BRICK NA RAIZ (backend/internal/domain/documento/service/estrutura.go), DEPOIS DE C6. Bug VIVO no codigo empurrado: Corrigir chama Reclassificar(papel, 1, cdm.OrigemUsuario) sem restricao de papel, entao uma requisicao do dono pode marcar o ordinal de um w:tbl como \"paragrafo\"; o bloco entra em ReferenciasCorpo e o primeiro mutador recusa o alvo que nao e w:p, falhando o job — e falha de worker trava permanentemente o par (documento, perfil). Este recorte AMPLIARIA a exposicao, levando o mesmo caminho aos quatro papeis de excecao. Conserto: Corrigir recusa transicao PARA cdm.Tabela e transicao DE cdm.Tabela, com *errors.ErroValidacao de campo \"papel\" (400). A assinatura Corrigir(ctx, dono, id, refXML, papel) (cdm.Indice, error) nao muda. A recusa de PARA Tabela fica junto de papel.Valido(), antes de qualquer I/O; a de DE Tabela exige o bloco alvo e fica depois de localiza-lo, antes de Reclassificar. Nenhuma outra transicao passa a ser recusada. A PREMISSA FOI CORRIGIDA: 'correcao humana de ou para Tabela nunca e legitima' NAO decorre da forma do no por si so — vale porque C6 veda as fontes nao estruturais. Sem C6, o caminho w:p sem estilo com recuo -> Citacao/0,5/OrigemHeuristica (C1) -> candidato (LimiteConsulta 0,7) -> julgamento Tabela/0,96 -> w:p com Papel Tabela faria a recusa de DE Tabela CONGELAR o reparo: 400 no PATCH, bloco fora de ReferenciasCorpo e fora da lista branca de C2, formatacao omitida em silencio. C1 NAO amplia o conjunto de candidatos: antes dele o bloco de recuo ja era Citacao/0,5/OrigemEstiloDocx, e 0,5 < 0,7 com origem fora das exclusoes de fallback.go:87 ja o tornava candidato — C1 so troca a origem. A armadilha Tabela/OrigemLLM e alcancavel desde antes deste recorte; o que o recorte faria de novo e tornar o congelamento silencioso ao acrescentar o termo DE Tabela sem C6. Com C6, Tabela <=> w:tbl e verdade para dado novo e o termo DE Tabela fica correto."
     }
   ],
   "criterios": [
     {
       "id": "A1",
       "contrato": "C1",
-      "cenario": "ExtrairBlocos sobre docxSintetico, um termo por caso, no vetor de entrada NÃO CONFIÁVEL: w:ind com w:start; com w:left; com os dois; com w:leftChars apenas; com valor NEGATIVO; com medida universal (\"4cm\"); com inteiro de 20 dígitos; com w:start INVÁLIDO (\"4cm\") ao lado de um w:left VÁLIDO; com w:start NEGATIVO ao lado de um w:left VÁLIDO; com w:ind REPETIDO no mesmo w:pPr; com w:ind dentro de w:pPrChange; com w:ind em parágrafo DENTRO de célula de w:tbl; w:pPr sem w:ind; e sem w:pPr",
-      "esperado": "w:start é lido com precedência sobre w:left, mas a precedência vale só quando o w:start PARSEIA: w:start=\"4cm\" ao lado de w:left=\"2268\" devolve 2268, não 0 — achado BAIXO da segurança, em que a precedência vencia antes do saneamento e descartava o único valor utilizável; w:leftChars sozinho dá 0; negativo dá 0; medida universal e overflow dão 0, SEM erro e SEM pânico; w:ind repetido usa o PRIMEIRO; w:ind em w:pPrChange é IGNORADO, porque guarda propriedade revogada; w:ind de parágrafo em célula NÃO contamina o BlocoBruto do w:tbl, que fica com 0; e os dois últimos dão 0. Cada caso é pinado pelo VALOR exato, e não por faixa: a cláusula anterior exigia que nenhum caso ficasse 'acima do limiar', o que é falso por construção — w:start=2268 e w:left=1134 estão acima de 567 de propósito, e A11 DEPENDE de 2268 estar acima para provar que o recuo classifica. A asserção de faixa contradizia a tabela do próprio critério e nada acrescentava: assert.Equal com o valor esperado já falha se o saneamento devolver MaxInt, negativo grande ou qualquer número errado. E w:start=\"-567\" ao lado de w:left=\"2268\" devolve 0, NÃO 2268: a precedência de w:start vale quando ele PARSEIA, e negativo parseia — o saneamento o zera depois. É a única assimetria com a regra de 'não descartar o único valor utilizável', está declarada em comentário de produção e o validador apontou que não tinha caso; agora tem",
-      "verificacao": "V1"
+      "cenario": "BlocoBruto paragrafo, EstiloNomeado vazio, RecuoEsquerdaTwips 2268 (4 cm, acima de 567)",
+      "esperado": "cdm.Bloco com Papel Citacao, Confianca 0,5 e Origem cdm.OrigemHeuristica; e a assercao de blocos_test.go:738, hoje OrigemEstiloDocx, que precisa ser invertida",
+      "verificacao": "V2"
     },
     {
       "id": "A2",
-      "contrato": "C2",
-      "cenario": "BlocoBruto com EstiloNomeado em cada nome da lista medida: Citao, Blocodecitao, Quote, IntenseQuote",
-      "esperado": "cdm.Citacao com confiancaEstiloConhecido e OrigemEstiloDocx. Um caso por nome: remover um da lista quebra exatamente o caso dele",
-      "verificacao": "V1"
+      "contrato": "C1",
+      "cenario": "Blocos brutos sem recuo com EstiloNomeado \"Citao\", \"Normal\" e \"Heading1\", e um bloco w:tbl",
+      "esperado": "Citacao/0,95, Paragrafo/0,95, Secao(1)/0,95 e Tabela/0,95, todos com Origem cdm.OrigemEstiloDocx; falsifica tanto reverter A1 quanto rebaixar a origem do caminho declarado",
+      "verificacao": "V2"
+    },
+    {
+      "id": "A13",
+      "contrato": "C1",
+      "cenario": "INVARIANTE QUE C1 REIVINDICA. Dois blocos Citacao no indice: 0,5/OrigemHeuristica (recuo) e 0,95/OrigemEstiloDocx (estilo); politica default de producao (LimiteConsulta 0,7), via o helper candidatosConsultados de cdm/fallback_test.go:209",
+      "esperado": "Exatamente um candidato consultado, o de origem heuristica e confianca 0,5: OrigemHeuristica nao entra nas exclusoes de fallback.go:87. Falsifica tanto excluir OrigemHeuristica do fallback quanto elevar a confianca do recuo acima de 0,7",
+      "verificacao": "V6"
     },
     {
       "id": "A3",
       "contrato": "C2",
-      "cenario": "EstiloNomeado em near-misses INEQUÍVOCOS: Citacao e Citação (as formas que o LO NÃO emite, por descartar não-ASCII), Quote2, BlocoDeCitacao, citao em caixa baixa, e BlockQuote",
-      "esperado": "NENHUM é Citacao — cai no caminho de C3 ou em Paragrafo. A comparação é exata e sensível a caixa, como Title/Normal/Heading já são. Citacao e Citação como near-miss é deliberado e documenta a medição: são o que a intuição diria e o LO não emite",
+      "cenario": "Definicao carregada de backend/rulesets/abnt-14724/v1.yaml, que nao declara a chave nova",
+      "esperado": "EntrelinhaPorPapel nil, Validar() sem erro e json.Marshal da Definicao sem a substring \"entrelinha_por_papel\": o checksum sha256 e o jsonb da versao ja semeada nao mudam. LIMITE DO QUE A3 MEDE, declarado pelo testador: internal/infra/ruleset importa internal/domain/ruleset, entao um teste em package ruleset nao pode importar o carregador sem ciclo, e V1 nao inclui infra/ruleset. A3 usa yaml.Unmarshal direto na Definicao: exercita a tag yaml, NAO o caminho schema -> json.Marshal/Unmarshal que roda em producao. A parte de contrato de imutabilidade (json.Marshal sem a substring, mapa vazio equivalendo a ausencia) e exata. Quem cobre o caminho real e A14(a) mais TestCarregarPerfilABNT14724, ambos em V6 — ou seja A3 ISOLADO NAO PROVA que o perfil semeado atravessa o carregador sem a chave",
       "verificacao": "V1"
     },
     {
       "id": "A4",
-      "contrato": "C3",
-      "cenario": "Parágrafo com RecuoEsquerdaTwips acima do limiar, nos estilos que NÃO bloqueiam: vazio, Normal e BodyText",
-      "esperado": "cdm.Citacao com a confiança própria de C3 nos três. O caso de Normal é o que importa: 47 dos 57 parágrafos do fixture real o usam, e com o portão da versão anterior o sinal nunca dispararia",
-      "verificacao": "V1"
-    },
-    {
-      "id": "A5",
-      "contrato": "C3",
-      "cenario": "Recusas do recuo, um termo por caso: recuo EXATAMENTE no limiar; recuo abaixo; recuo zero; e recuo acima do limiar mas com estilo que determina outro papel (Title, Heading1, e um nome da lista de C2)",
-      "esperado": "não é Citacao por C3 em nenhum. No limiar exato NÃO classifica, fixando que a comparação é estrita. Nos de estilo, o papel do ESTILO vence — Titulo, Secao ou Citacao por C2, nunca Citacao por recuo",
-      "verificacao": "V1"
-    },
-    {
-      "id": "A6",
-      "contrato": "C4",
-      "cenario": "Fallback.Aplicar com PoliticaConfianca default {LimiteConsulta 0.7, LimiteConfirmacao 0.7, LimiteAutomatico 0.95} sobre índice com um Citacao vindo de C3 e um vindo de C2",
-      "esperado": "o de C3 ENTRA no conjunto de candidatos e o de C2 NÃO. É o critério que prova que o desempate existe de verdade: sem ele, a faixa de confiança permitiria 0.8 e o bloco inferido sairia do fallback em silêncio",
-      "verificacao": "V1"
-    },
-    {
-      "id": "A7",
-      "contrato": "C5",
-      "cenario": "AplicarHeuristica com região aberta por REFERÊNCIAS e, dentro dela, um bloco Citacao a confiancaEstiloConhecido, um Citacao com a confiança de C3, e um Paragrafo a confiancaSemEstilo",
-      "esperado": "os dois Citacao RESISTEM e mantêm papel e confiança; o Paragrafo é reclassificado para Referencia com confiancaRegiao. A regra é por CONFIANÇA, não por papel: palpite posicional não vence evidência no bloco CONFIRMADO como o comportamento certo na correção de C5: a regra passou a ter UM termo (Papel != Paragrafo), e é A7 que obriga isso — com o termo de confiança, o Citacao de 0.5 seria rebaixado e este critério falharia.",
-      "verificacao": "V1"
-    },
-    {
-      "id": "A8",
-      "contrato": "C5",
-      "cenario": "O caso PREEXISTENTE que a mesma regra conserta: Titulo a confiancaEstiloConhecido dentro de região aberta por RESUMO",
-      "esperado": "resiste e segue Titulo. Hoje é sobrescrito para Resumo a 0.6, porque ehCabecalho(Titulo) é falso — o defeito não é introduzido por este recorte, e a regra geral o conserta de lambuja",
-      "verificacao": "V1"
-    },
-    {
-      "id": "A9",
-      "contrato": "C5",
-      "cenario": "Propagação de região que deve CONTINUAR funcionando, incluindo o caso que a versão anterior deste critério ESCONDIA: blocos Paragrafo com confiancaSemEstilo (0.2) E blocos Paragrafo com confiancaEstiloConhecido (0.95) vindos de `Normal`, todos dentro de região aberta por RESUMO e por REFERÊNCIAS",
-      "esperado": "TODOS são reclassificados, inclusive os de 0.95 — Paragrafo é papel-default e palpite posicional o vence em qualquer confiança. A versão anterior exercitava só 0.2, o caso que passa de qualquer jeito, e por isso não teria pegado o bloqueante que as duas auditorias acharam Este critério NASCE VERDE, e isso é o ponto: ele é o FALSIFICADOR de um conserto errado de C5. O testador rodou os dois subcasos isolados e os dois passam hoje, inclusive o de Paragrafo@0.95.",
-      "verificacao": "V1"
-    },
-    {
-      "id": "A10",
       "contrato": "C2",
-      "cenario": "REGRESSÃO dos dois fixtures: pipeline ExtrairBlocos mais camada 1 mais AplicarHeuristica sobre artigo-real-libreoffice.docx e artigo-desformatado.docx",
-      "esperado": "os papéis produzidos são EXATAMENTE os de hoje e há ZERO Citacao. Medi que nenhum dos dois fixtures tem estilo de citação nem recuo à esquerda, então a feature é no-op neles — e isso é o que o critério afirma, em vez de uma contagem de 'blocos que mudam', que a auditoria mostrou ser vacuosa. A expectativa é compartilhada com analisar_estrutura_test.go, que entrou em arquivos por isso A arquitetura mediu os dois fixtures de forma independente e confirmou: 57 parágrafos cada, estilos {Title 1, Normal 47, Heading1 7, Heading2 2} e {Title 1, sem pStyle 47, ...}, ZERO w:ind e zero estilo de citação. A premissa de no-op confere. MEDIDO pelo testador antes do recorte: as DUAS fixtures produzem a MESMA sequência de papéis de expectativaFixtureReal40Blocos(), divergindo só nas confianças (0.95 de `Normal` contra 0.2 sem pStyle). Por isso analisar_estrutura_test.go NÃO precisou de ajuste e saiu de `arquivos`.",
-      "verificacao": "V1"
-    },
-    {
-      "id": "A11",
-      "contrato": "C1",
-      "cenario": "Pipeline sobre docxSintetico com um bloco de recuo alto e um com w:pStyle val=Quote, atravessando ExtrairBlocos, camada 1 e AplicarHeuristica",
-      "esperado": "os dois saem Citacao com as confianças respectivas de C3 e C2, provando o caminho completo. É o critério que substitui a parte útil da A10 vacuosa da versão anterior",
-      "verificacao": "V1"
-    },
-    {
-      "id": "A12",
-      "contrato": "C2",
-      "cenario": "Citacao atravessando cdm.NovoBloco, Indice.Validar, Indice.Serializar e cdm.Desserializar, e um CDM antigo SEM nenhum Citacao",
-      "esperado": "válido em todas as portas, round-trip preserva papel, confiança e origem, e o CDM antigo segue válido. Guarda barata de persistência — NÃO conta como cobertura de C2 ou C3, porque a serialização é agnóstica a papel (serializacao.go grava o nome como string) e citacao já está em papeisSemNivel",
-      "verificacao": "V1"
-    },
-    {
-      "id": "A13",
-      "contrato": "C3",
-      "cenario": "Caminho novo de classificação exercitado com documento cujo texto contenha uma marca única, com buffer de log ligado",
-      "esperado": "nenhuma marca em erro, log ou trace. ClassificarPorEstiloDocx não devolve erro e não loga hoje; o critério nasce verde e existe para derrubar quem acrescentar log de conteúdo depois. Ler estilo e recuo NÃO toca o texto do bloco, diferente da heurística de aspas que foi retirada",
+      "cenario": "Tabela de Definicao valida exceto o campo novo. Aceitos: {\"citacao\": 1.0}, {\"referencia\": 1.0}, {\"legenda\": 1.0}, {\"nota_rodape\": 1.0}. Rejeitados, um termo invalido por caso: {\"paragrafo\": 1.0}, {\"tabela\": 1.0}, {\"secao\": 1.0}, {\"titulo\": 1.0}, {\"citação\": 1.0}, {\"\": 1.0}, {\"citacao\": 0}, {\"citacao\": -1}, {\"citacao\": NaN}, {\"citacao\": +Inf}, {\"citacao\": 0.49/240}",
+      "esperado": "Aceitos sem erro; rejeitados devolvem *errors.ErroValidacao, com campo \"entrelinha_por_papel\" nas chaves fora da lista branca e campo \"corpo\" nas medidas invalidas. \"paragrafo\" e \"tabela\" sao os casos que provam a lista branca: o primeiro quebraria a disjuncao de C3, o segundo brickaria todo documento com tabela. DETERMINISMO, decisao do principal sobre o achado do RED: o testador mediu que, com dois defeitos coexistindo ({\"paragrafo\": 1.0, \"citacao\": 0}), o campo do erro 400 varia conforme a ordem de iteracao do mapa — 'entrelinha_por_papel' ou 'corpo' — porque Validar devolve no primeiro erro. Indeterminismo observavel na API nao vai para a documentacao: a validacao roda em DUAS PASSADAS, primeiro varrendo TODAS as chaves contra a lista branca e so depois medindo os valores, em ordem determinada. O campo para chave fora da lista e 'entrelinha_por_papel'. O testador acertou em nao escrever assercao flaky para o caso anterior",
       "verificacao": "V1"
     },
     {
       "id": "A14",
+      "contrato": "C2",
+      "cenario": "FORMA DO ARQUIVO, QUE E O QUE O ADIAMENTO DO v2 PROTEGE. YAML inline passado a infra/ruleset.Carregar, no molde de TestCarregarSemChavesSilentesProduzNil (carregar_test.go:231): (a) perfil valido com entrelinha_por_papel: {citacao: 1.0} na raiz; (b) o mesmo com citacao: 0; (c) com citacao: \"simples\"; (d) com a chave aninhada dentro de corpo; (e) com entrelinha_por_papel: {paragrafo: 1.0}",
+      "esperado": "(a) carrega com EntrelinhaPorPapel igual a {\"citacao\": 1.0}; (b) a (e) devolvem *errors.ErroValidacao com campo \"ruleset\" e a mensagem fixa \"conteudo de ruleset invalido\". O criterio afere RECUSA e a mensagem fixa, e NAO distingue qual gate recusou: erroConteudo e a unica saida de erro de Carregar, usada por schema, json.Unmarshal e Definicao.Validar. A separacao vem dos cenarios, nao da mensagem — (a) prova o nome da propriedade na raiz, (d) prova additionalProperties false em corpo, (e) prova que a lista branca atravessa o arquivo. Sem este criterio, nome errado ou aninhamento em corpo deixa todos os outros criterios e V1/V2/V4 verdes e o erro so aparece dentro de arquivo imutavel",
+      "verificacao": "V6"
+    },
+    {
+      "id": "A5",
       "contrato": "C3",
-      "cenario": "Leitura dos comentários de limiarRecuoCitacaoTwips, da constante de confiança de C3 e da lista de C2",
-      "esperado": "o limiar é declarado como parâmetro de DETECÇÃO, com a nota de que a NBR 10520 não está disponível no projeto e que o valor não é requisito de norma; a confiança cita a dependência de LimiteConsulta; e a lista de C2 registra que foi MEDIDA com soffice, que o LO descarta caracteres não-ASCII do styleId, e que por isso a lista é frágil e o recuo é o caminho robusto. Não observável em teste; verificado na revisão do delta",
-      "verificacao": "V3"
+      "cenario": "TERMO 1 DO PISO. Definicao com {\"citacao\": 1.0}; indice com Citacao/0,95/OrigemEstiloDocx em RefXML 3 e Paragrafo/0,95/OrigemEstiloDocx em RefXML 0 e 1",
+      "esperado": "Plano.EntrelinhaPorPapel igual a [{Papel: cdm.Citacao, Entrelinha: 1.0, Referencias: [3]}] e ReferenciasCorpo [0 1]; remover o termo OrigemEstiloDocx da condicao composta derruba este caso",
+      "verificacao": "V1"
+    },
+    {
+      "id": "A6",
+      "contrato": "C3",
+      "cenario": "TERMO 2 DO PISO. Definicao com {\"legenda\": 1.0}; indice com Legenda/1,0/OrigemUsuario em RefXML 5, o estado que PATCH /v1/documentos/{id}/estrutura grava",
+      "esperado": "Grupo [{Legenda, 1.0, [5]}]; remover o termo OrigemUsuario derruba este caso, e nenhum dos dois termos sozinho satisfaz A5 e A6 ao mesmo tempo",
+      "verificacao": "V1"
+    },
+    {
+      "id": "A7",
+      "contrato": "C3",
+      "cenario": "Definicao com {\"citacao\": 1.0}; indice com Citacao/0,5/OrigemHeuristica em RefXML 2 (citacao detectada so pelo recuo, conforme C1) entre Paragrafo/OrigemEstiloDocx em 1 e 3",
+      "esperado": "Nenhum grupo emitido e ReferenciasCorpo [1 3]: o ordinal 2 nao aparece em nenhum conjunto do plano, logo nenhum mutador o alcanca e o paragrafo do autor fica como ele escreveu. Mata o mutante que amplia o piso para OrigemHeuristica",
+      "verificacao": "V1"
+    },
+    {
+      "id": "A8",
+      "contrato": "C3",
+      "cenario": "DOIS MUTANTES QUE SO ESTE CRITERIO MATA. (a) Definicao com {\"referencia\": 1.0, \"legenda\": 1.0, \"nota_rodape\": 1.0} e indice com Referencia/0,6/OrigemHeuristica (propagacao por regiao) e Legenda/0,8/OrigemHeuristica (regra textual), os valores reais de confiancaRegiao e confiancaRegraTextual; (b) Definicao com {\"citacao\": 1.0} e indice com Citacao/0,95/OrigemLLM, o estado que fallback.go:129 grava",
+      "esperado": "Plano.EntrelinhaPorPapel vazio nos dois casos. (a) mata o mutante que troca o piso por limiar de confianca: Confianca >= 0,6 sobrevive a A5, A6 e A7. (b) mata o mutante que acrescenta || bloco.Origem == cdm.OrigemLLM, que sobrevive a todos os outros criterios e faria palpite de LLM com confianca alta mutar o documento, contra a decisao de produto, imune a qualquer piso por confianca",
+      "verificacao": "V1"
+    },
+    {
+      "id": "A9",
+      "contrato": "C3",
+      "cenario": "Dois casos de regressao e vazio: (a) Definicao sem a chave nova, indice com Paragrafo e Citacao autorizada; (b) Definicao com {\"citacao\": 1.0} e indice sem nenhum bloco Citacao",
+      "esperado": "(a) EntrelinhaPorPapel nil ou vazio e ReferenciasCorpo identico ao comportamento atual; (b) nenhum grupo vazio emitido. Falsifica emitir grupo por papel declarado em vez de por bloco autorizado",
+      "verificacao": "V1"
+    },
+    {
+      "id": "A10",
+      "contrato": "C3",
+      "cenario": "Determinismo e propagacao de erro: indice com blocos fora de ordem crescente de RefXML, Citacao/0,95/OrigemEstiloDocx em 9 e em 4 e Legenda/1,0/OrigemUsuario em 7, Definicao com {\"citacao\": 1.0, \"legenda\": 1.0}; depois indice com RefXML repetido; depois Definicao com margens que consomem a pagina",
+      "esperado": "Grupos [{Citacao, 1.0, [4 9]}, {Legenda, 1.0, [7]}] nessa ordem (Papel.String() crescente), interseccao vazia entre grupos e com ReferenciasCorpo; indice duplicado devolve erro que satisfaz errors.E(err, cdm.ErroRefXMLDuplicado) e Plano zero; definicao invalida devolve *errors.ErroValidacao e Plano zero",
+      "verificacao": "V1"
+    },
+    {
+      "id": "A11",
+      "contrato": "C4",
+      "cenario": "DOCX com w:p 0 e 1 de corpo e w:p 2 com estilo de citacao; Definicao com corpo.entrelinha 1.5 e {\"citacao\": 1.0}; plano vindo de Planejar; AplicarPlano seguido de Salvar",
+      "esperado": "w:spacing dos ordinais 0 e 1 com line=360 lineRule=auto e do ordinal 2 com line=240 lineRule=auto; sequencia de runas de todos os w:t identica a da entrada; partes do ZIP fora de word/document.xml iguais byte a byte; repetir AplicarPlano dez vezes nao muda a saida",
+      "verificacao": "V2"
+    },
+    {
+      "id": "A12",
+      "contrato": "C4",
+      "cenario": "Plano montado em codigo com um grupo cujo Referencias aponta para um ordinal de w:tbl — estado que C5 passa a tornar inalcancavel pelo HTTP, mas que o tipo Plano ainda permite",
+      "esperado": "AplicarPlano devolve erro e o pacote salvo continua igual ao anterior a chamada, inclusive sem o delta de pagina: a falha e atomica. Falsifica aplicar grupos fora da copia transacional",
+      "verificacao": "V2"
     },
     {
       "id": "A15",
       "contrato": "C5",
-      "cenario": "O OUTRO ramo de rebaixamento, que C5 não cobre: bloco Citacao a confiancaEstiloConhecido cujo texto casa papelPorRegraTextual — por exemplo uma citação que começa com \"Fonte:\" e viraria Legenda a confiancaRegraTextual (0.8)",
-      "esperado": "decisão DECLARADA e fixada: regra textual (0.8) NÃO rebaixa Citacao de estilo nomeado (0.95), pelo mesmo princípio de C5 — evidência declarada pelo documento vence inferência. Sem este critério, C5 conserta só o ramo de região e deixa o de regra textual aberto, o que a auditoria apontou como BAIXO mas é o mesmo defeito",
-      "verificacao": "V1"
+      "cenario": "TERMO 1. Documento em StatusAnalisado cujo bloco em RefXML 4 e Paragrafo; Corrigir(..., refXML 4, cdm.Tabela)",
+      "esperado": "*errors.ErroValidacao com campo \"papel\", indice nao gravado e repositorio sem chamada de escrita",
+      "verificacao": "V6"
     },
     {
       "id": "A16",
-      "contrato": "C4",
-      "cenario": "Delta de candidatos ao fallback, medido: índice de um documento SEM recuo e de um COM recuo à esquerda acima do limiar, contando quantos blocos entram no conjunto de candidatos de Fallback.Aplicar",
-      "esperado": "o documento com recuo tem MAIS candidatos, e o teste NOMEIA quantos. É o critério que torna visível um efeito que a spec anterior negava: hoje um parágrafo `Normal` fica em 0.95 e NUNCA é candidato, logo seu TextoResumo nunca atravessa a fronteira para o Jev; com C3, todo `Normal` recuado cai para 0.5 e passa a atravessar. Mitigado por Jev.Habilitado ser false por padrão, mas é mudança de QUAIS blocos saem, não de volume — o teto de 32 em fallback.go:95 é o mesmo",
-      "verificacao": "V1"
+      "contrato": "C5",
+      "cenario": "TERMO 2. Documento em StatusAnalisado cujo bloco em RefXML 4 e Tabela (produzido pela forma do no w:tbl); Corrigir(..., refXML 4, cdm.Paragrafo) e, em outro caso, cdm.Citacao",
+      "esperado": "Nos dois casos *errors.ErroValidacao com campo \"papel\" e nenhuma escrita: e exatamente a sequencia que hoje brica o par (documento, perfil). Falsifica guardar so a transicao PARA Tabela",
+      "verificacao": "V6"
     },
     {
       "id": "A17",
-      "contrato": "C6",
-      "cenario": "AplicarHeuristica sobre [Paragrafo \"RESUMO\", Titulo \"1 INTRODUÇÃO\"@0.95, Paragrafo \"texto corrido\"] — o rótulo abre região, o bloco do meio tem papel DETERMINADO que NÃO é cabeçalho (ehCabecalho(Titulo) é falso) e cujo TEXTO casa numeração de seção",
-      "esperado": "o Titulo sai intacto (papel Titulo, confiança 0.95, origem preservada) E o terceiro bloco sai Paragrafo, não Resumo: o termo 2 fechou a região. Falsifica a remoção do termo 2 — sem ele o terceiro bloco sai Resumo@0.6",
-      "verificacao": "V1"
-    },
-    {
-      "id": "A18",
-      "contrato": "C6",
-      "cenario": "AplicarHeuristica sobre [Paragrafo \"RESUMO\", Secao(1) \"Introdução\"@0.95 (papel do estilo nomeado, SEM numeração no texto), Paragrafo \"texto corrido\"]",
-      "esperado": "o terceiro bloco sai Paragrafo: o termo 1 fechou a região pelo papel, sem ajuda do texto. Falsifica a remoção do termo 1 — este é o caso que o texto NÃO resolve, porque \"Introdução\" não casa numeracaoDeSecao",
-      "verificacao": "V1"
+      "contrato": "C5",
+      "cenario": "ESCOPO DA GUARDA DE C5, nao o caminho do LLM. Bloco Paragrafo em RefXML 4 corrigido para cdm.Referencia, e bloco Citacao corrigido para cdm.Paragrafo — os dois pares sao nao-Tabela",
+      "esperado": "Sucesso, bloco com Papel novo, Confianca 1 e OrigemUsuario, indice gravado. Prova apenas que a guarda de C5 e estreita e nao recusa reclassificacao legitima; NAO cobre bloco w:p com Papel Tabela, estado que C6 torna inalcancavel para dado novo e que, em linha legada ja gravada, e pendencia de dados, nao de desenho",
+      "verificacao": "V6"
     },
     {
       "id": "A19",
       "contrato": "C6",
-      "cenario": "AplicarHeuristica com região aberta por \"RESUMO\" e, no meio, um bloco que casa regra textual que NÃO é cabeçalho. TABELA DE DOIS CASOS, um por ramo de papelPorRegraTextual que não é cabeçalho: \"Tabela 1 — distribuição\" (legenda) e \"PALAVRAS-CHAVE: formatação, norma\" (palavras-chave)",
-      "esperado": "em cada caso o bloco do meio sai com o papel da regra textual @0.8 E o terceiro bloco sai Resumo@0.6: a região continua ABERTA, porque legenda e palavras-chave aparecem dentro da região sem encerrá-la. As duas pontas são aferidas de propósito — a primeira é pré-condição de que a regra textual foi alcançada, a segunda é o que falsifica a implementação errada. NASCEM VERDES: é blindagem contra uma implementação de C6 que trate 'casou alguma regra textual' como 'é cabeçalho', não prova do código de hoje. Dois casos em vez de um por rigor da regra 12: 'os dois ramos ficam certos juntos se o conserto for correto' é condicional sobre a implementação, não medição dela. LIMITE MEDIDO PELO VALIDADOR: este criterio NAO blinda o termo 2 de C6. O bloco do meio e Paragrafo, logo nunca alcanca a guarda de papel determinado; o que A19 cobre e o ehCabecalho do ramo textual preexistente. O mutante `ehCabecalho(bloco.Papel) || casou` passa por A19. Quem falsifica aquele mutante e A20",
-      "verificacao": "V1"
+      "cenario": "LADO DA ESCRITA. Fake de ClassificadorEstrutura devolve, para um lote de dois candidatos w:p (Citacao/0,5/OrigemHeuristica e Paragrafo/0,2/OrigemEstiloDocx), um julgamento com Papel cdm.Tabela e Confianca 0,96, acima do LimiteAutomatico da politica default de producao, e outro julgamento valido",
+      "esperado": "Os DOIS candidatos recebem RevisaoEstrutura com acaoRevisar e motivoRespostaClassificadorInvalida, inclusive o que recebeu julgamento valido, e nenhuma das duas entradas do indice muda Papel, Confianca ou Origem (nenhuma com OrigemLLM). A assercao sobre o candidato de julgamento VALIDO e o que fixa ONDE o termo mora: uma recusa posta em Aplicar depois da linha 122, por bloco, nao reprova o lote e deixaria esse candidato reclassificado, passando se a assercao fosse apenas 'nenhum bloco com OrigemLLM'. Remover o termo de validarJulgamentos tambem derruba o caso, porque o w:p viraria Tabela/OrigemLLM e a invariante de C5 cairia",
+      "verificacao": "V6"
     },
     {
       "id": "A20",
       "contrato": "C6",
-      "cenario": "AplicarHeuristica sobre [Paragrafo \"RESUMO\", Citacao \"Tabela 1 — distribuição\"@0.95, Paragrafo \"texto corrido\"] — bloco de papel DETERMINADO (alcança a guarda) cujo TEXTO casa regra textual que NÃO é cabeçalho. Sonda do validador, verde no código real e vermelha no mutante",
-      "esperado": "o terceiro bloco sai Resumo@0.6: a região continua ABERTA, porque legenda não é cabeçalho. Falsifica o mutante `ehCabecalho(bloco.Papel) || casou`, que dá Paragrafo no terceiro bloco — e que passa por A19, A17 e A18 e pela suíte de cdm inteira. Este é o caso que de fato blinda o LIMITE DO TERMO 2 de C6",
-      "verificacao": "V1"
+      "cenario": "LADO DO CANDIDATO, que exige limite configurado alto para exercitar algo. Politica com LimiteConsulta 0,96, LimiteConfirmacao 0,97 e LimiteAutomatico 0,99; indice com um bloco Tabela/0,95/OrigemEstiloDocx (o que ClassificarPorEstiloDocx emite para w:tbl) e um bloco Paragrafo/0,2/OrigemEstiloDocx",
+      "esperado": "A slice de candidatos CAPTURADA pelo fake (classificador de eco que guarda o lote recebido) tem exatamente um elemento, o Paragrafo, e nunca o bloco Tabela; o bloco Tabela sai sem revisao e sem reclassificacao. Com LimiteConsulta default 0,7 o caso nao exercitaria nada, porque 0,95 ja excluiria o bloco por confianca: o limite alto e o que isola o termo novo",
+      "verificacao": "V6"
+    },
+    {
+      "id": "A18",
+      "contrato": "C4",
+      "cenario": "ATOMICIDADE ENTRE CHAMADAS, com grupo valido ANTES do que falha. Documento com w:p 0 e 1 de corpo, w:p 2 de citacao e um w:tbl em 3. Primeiro AplicarPlano com plano valido (grupo [{Citacao, 1.0, [2]}]) e Salvar, guardando os bytes. Segundo AplicarPlano sobre o MESMO *Documento com DOIS grupos, nesta ordem: [{Citacao, 2.0, [2]}], valido, e um grupo apontando o ordinal 3 (w:tbl), que erra. A ordem e o ponto: com um unico grupo, e justamente o que falha, uma etapa que valide antes de escrever nunca chega a vazar e o criterio passa vazio. O grupo valido precisa escrever primeiro.",
+      "esperado": "O segundo AplicarPlano devolve erro e Salvar reproduz exatamente os bytes guardados depois do primeiro — line=240 no ordinal 2, nao 480. O que esta sendo cacado: copia := *documento e copia RASA de Documento{arquivos []*zip.File, partesSubstituidas map[string][]byte} (pacote.go:25-28) e a atomicidade so foi verificada no nivel do mapa. arquivos e somente leitura (pacote.go:99, partes.go:63, recuo.go:232; gravarParte copia FileHeader por valor e realoca Extra), entao o vazamento possivel e mutar IN-PLACE um []byte que maps.Clone compartilha entre a copia e o receptor. Este e o unico criterio que falha se uma etapa de grupo escrever assim em vez de passar por SubstituirParte",
+      "verificacao": "V2"
     }
   ],
   "verificacoes": [
     {
       "id": "V1",
-      "comando": "go test ./internal/infra/ooxml ./internal/domain/cdm -race -count=1",
+      "comando": "go test ./internal/domain/formatador ./internal/domain/ruleset -race -count=1 -cover",
       "diretorio": "backend",
       "responsavel": "testador",
       "estado": "passou",
-      "evidencia": "RED em 15/10/2026, dir backend: go test ./internal/infra/ooxml ./internal/domain/cdm -race -count=1 -> ooxml FAIL [build failed] por RecuoEsquerdaTwips e limiarRecuoCitacaoTwips indefinidos; cdm FAIL com EXATAMENTE 4 testes, todos novos, nada preexistente quebrado. Diffs reais: A8 sai resumo@0.6 em vez de titulo@0.95; A15 sai legenda@0.8 em vez de citacao@0.95. CLASSIFICAÇÃO: RED proprio por compilacao em A1, A4, A5, A11; RED por assercao em A7 (dois subtestes), A8 e A15; NASCERAM VERDES A6, A9, A12 e A16. A2, A3, A10 e A13 estao vermelhos so por arrasto do build. O testador rodou go test -gcflags=-e para ver alem de 'too many errors' e confirmou que TODO erro de compilacao e um dos dois simbolos contratados — nenhum import morto nem erro escondido atras do limite. A1 tem 12 subcasos, um por termo, pinados pelo VALOR exato. gofmt vazio. || VERDE em 16/10/2026, dir backend, mesmo comando: ok internal/infra/ooxml (90.553s) e ok internal/domain/cdm (1.055s). O RED expos DOIS bloqueantes de spec que tres rodadas de auditoria nao viram: (a) A7 prometia que o Citacao vindo de recuo resiste a inferencia por regiao, mas C5 exigia tambem Confianca > confiancaRegiao, e C4 fixa a confianca do recuo em 0.5 contra confiancaRegiao 0.6 — logo 0.5 > 0.6 e falso e o bloco SERIA rebaixado; pior, esse termo nao tinha NENHUM caso que falsificasse sua remocao, violando a regra 12 dentro da propria spec. C5 foi reduzido a UM TERMO (Papel != Paragrafo). (b) A1 trazia, no esperado e numa assercao aplicada a TODOS os subcasos, a clausula 'nenhum caso acima do limiar', que e falsa por construcao: w:start=2268 e w:left=1134 estao acima de 567 de proposito e A11 DEPENDE de 2268 estar acima. A assercao de faixa foi removida pelo principal (assert.Equal por caso a subsume: saneamento devolvendo MaxInt ou negativo grande quebra o Equal) e a clausula foi corrigida no esperado de A1. || REABERTA em 16/10/2026: o fechamento trouxe achados que mudam produção (R1 do validador -> contrato C6, criterios A17 e A18; achado BAIXO da seguranca na precedencia de w:start -> subcaso novo em A1). A medicao verde acima vale para o codigo ANTERIOR a esses consertos e nao cobre A17, A18 nem o subcaso novo. || SEGUNDA RODADA, 16/10/2026, dir backend: RED real foi blocos_test.go:626 (esperado 2268, obtido 0, subcaso novo de A1) e heuristica_test.go:804 (papel do bloco 2 = resumo, esperado paragrafo, Confianca 0.6 — A17). Depois do conserto, go test ./internal/infra/ooxml ./internal/domain/cdm -race -count=1 -> ok ooxml 89.000s, ok cdm 1.050s. A17, A18, A19 (dois subcasos) e TestAplicarHeuristicaFixtureRealIdentificaEstruturaDoArtigo passam, este ultimo com os blocos 7, 10 e 36-39. HONESTIDADE DA EVIDENCIA, nas palavras do testador: o GREEN deste recorte se apoia em UM vermelho de dominio (A17) e um de ooxml (subcaso w:start invalido de A1); A18 e A19 nasceram verdes e sao blindagem contra regressao, nao ampliacao da prova do codigo atual. Cobertura focal de internal/domain/cdm em 94,6% e de STATEMENTS, nao de condicoes, e nao e a suite global. VIES DE PROCESSO, meu: rodei testador e codador em PARALELO, entao A19 foi medido contra a arvore JA CONSERTADA — e blindagem verificada contra o conserto correto, nao contra o buraco. Troquei rigor por paralelismo e nao registrei a troca na hora. || TERCEIRA RODADA, 16/10/2026, dir backend: A19 cai por MUTACAO. O validador provou, e o testador reproduziu com go test -overlay sobre copia mutante no scratchpad, que o mutante `ehCabecalho(bloco.Papel) || casou` deixa a suite de cdm inteira passando, A19 incluido, porque em A19 o bloco do meio e Paragrafo e nunca alcanca a guarda. A20 foi escrito e e o UNICO vermelho sob o mutante: 'A20: papel Citacao com texto de LEGENDA nao fecha a regiao' FAIL, bloco 2 papel inesperado. Verde contra o codigo real. Caminhos do OR com caso cada: termo 1 verdadeiro -> A18; termo 2 verdadeiro com termo 1 falso -> A17; ambos falsos -> A20 e A8; mutante `casou` -> A20. Focal final: ok ooxml 96.292s cobertura 90,6% de statements, ok cdm 1.061s cobertura 94,6% de statements. A18, A19 e A20 nasceram verdes e sao blindagem contra regressao, nao ampliacao da prova do codigo atual — com a diferenca de que A20 tem MORTE DE MUTANTE MEDIDA e A18/A19 nao. Cobertura e de statements, nao de condicoes, e nao e a suite global."
+      "evidencia": "VERDE em 17/10/2026, dir backend: ok internal/domain/formatador 1.017s cobertura 93,8% de statements; ok internal/domain/ruleset 1.045s cobertura 98,8%. RED anterior era por COMPILACAO (GrupoEntrelinha, Plano.EntrelinhaPorPapel e Definicao.EntrelinhaPorPapel indefinidos). Cobertura NAO se moveu ao acrescentar os dois pinos de invariante (lista branca e disjuncao adversarial), porque eles nao acrescentam statement e sim condicao — demonstracao pratica de que cobertura de statements nao mede a regra 12."
     },
     {
       "id": "V2",
-      "comando": "go build ./... && go vet ./... && go vet -tags=integration ./... && gofmt -l . && golangci-lint run ./... && go test ./... -race -count=1",
+      "comando": "go test ./internal/infra/ooxml -race -count=1",
       "diretorio": "backend",
-      "responsavel": "principal",
+      "responsavel": "testador",
       "estado": "passou",
-      "evidencia": "Medido em 16/10/2026, dir backend, pelo principal: go build ./... && go vet ./... && go vet -tags=integration ./... && gofmt -l . -> sem saida, exit 0. golangci-lint run ./... -> '0 issues.'. go test ./... -race -count=1 -shuffle=on -> nenhuma linha FAIL e nenhum pacote fora de 'ok'/'no test files'; shuffle ligado de proposito porque este projeto JA teve teste que passava so pela ordem alfabetica dos arquivos. Escopo: suite GLOBAL do backend, nao o focal do recorte. Integracao NAO foi executada neste fechamento: go vet -tags=integration compila as tags mas nao roda testcontainers; o recorte nao toca data/postgres. || REEXECUTADO em 16/10/2026 apos os consertos de C6 e da precedencia de w:start, mesmos comandos e mesmo escopo: build/vet/vet-integration/gofmt exit 0 sem saida; golangci-lint '0 issues.'; go test ./... -race -count=1 -shuffle=on sem nenhuma linha FAIL e nenhum pacote fora de ok/no test files. A medicao anterior desta mesma V2 vale para o codigo ANTERIOR aos consertos e foi preservada acima. || TERCEIRA EXECUCAO, 16/10/2026, apos A20 e o subcaso negativo de A1 (so arquivos de teste mudaram nesta rodada): build/vet/vet-integration/gofmt exit 0 sem saida; golangci-lint '0 issues.'; go test ./... -race -count=1 -shuffle=on sem nenhuma linha FAIL."
+      "evidencia": "VERDE em 17/10/2026, dir backend: ok internal/infra/ooxml 52.151s. RED anterior por compilacao no mesmo pacote. Inclui A18 (atomicidade entre chamadas) e o pino de sobreposicao 'ultima etapa vence'."
+    },
+    {
+      "id": "V6",
+      "comando": "go test ./internal/domain/cdm ./internal/domain/documento/service ./internal/infra/ruleset -race -count=1 -cover",
+      "diretorio": "backend",
+      "responsavel": "testador",
+      "estado": "passou",
+      "evidencia": "VERDE em 17/10/2026, dir backend: ok internal/domain/cdm 1.034s 94,6%; ok internal/domain/documento/service 1.022s 95,8%; ok internal/infra/ruleset 1.420s 82,8%. RED anterior: 4 vermelhos por ASSERCAO (A19, A20, A15, A16) e 1 por compilacao (A14)."
     },
     {
       "id": "V3",
-      "comando": "revisão manual do delta pelo validador e pela segurança",
+      "comando": "go test ./... -race -count=1 -shuffle=on",
+      "diretorio": "backend",
+      "responsavel": "testador",
+      "estado": "passou",
+      "evidencia": "VERDE em 17/10/2026, dir backend: go test ./... -race -count=1 -shuffle=on sem nenhuma linha FAIL e nenhum pacote fora de ok/no test files. Shuffle ligado de proposito: este projeto ja teve teste que passava so pela ordem alfabetica dos arquivos."
+    },
+    {
+      "id": "V4",
+      "comando": "go run ./cmd/rulesetctl validar --dir rulesets",
       "diretorio": "backend",
       "responsavel": "principal",
       "estado": "passou",
-      "evidencia": "V3 é revisão HUMANA de comentário, não comando. Existe porque A14 afere texto de comentário e a auditoria apontou que apontá-lo para V2 (build, vet, gofmt, suíte) seria trilha de evidência FALSA: nenhum daqueles comandos lê comentário. || EXECUTADA em 16/10/2026. Validador: APROVA COM RESSALVA em duas rodadas; a segunda rodada usou sondas de MUTACAO e foi ela que derrubou A19 e confirmou, termo por termo, que A17 falsifica o termo 2 e A18 o termo 1. Seguranca: APROVA COM RESSALVA, sem achado critico ou alto, com dois BAIXO (w:ind herdado de caixa de texto; precedencia de w:start antes do saneamento, este consertado) e um MEDIO PREEXISTENTE fora do recorte (abrirDocumentoPrincipal sem io.LimitReader). Revisao de comentario (A14): o bloqueante B1 era um comentario que prometia um bloco de controle inexistente, e a frase 'A19 existe para pegar isso' no proprio contrato C6 era afirmacao sem prova — os dois corrigidos. Nenhum setimo comentario mentiroso na releitura final."
+      "evidencia": "VERDE em 17/10/2026, dir backend: go run ./cmd/rulesetctl validar --dir rulesets -> '1 ruleset(s) validado(s)', exit 0. LIMITE DECLARADO, apontado pelo codador: V4 NAO exercita o schema novo, porque abnt-14724/v1.yaml e imutavel e nao declara entrelinha_por_papel. Quem exercita e A14, por YAML inline em infra/ruleset.Carregar, dentro de V6. Verificacao verde que nao cobre o que parece cobrir."
+    },
+    {
+      "id": "V5",
+      "comando": "go build ./... && go vet ./... && gofmt -l . && golangci-lint run ./...",
+      "diretorio": "backend",
+      "responsavel": "principal",
+      "estado": "passou",
+      "evidencia": "VERDE em 17/10/2026, dir backend: go build ./... && go vet ./... && go vet -tags=integration ./... && gofmt -l . exit 0 sem saida; golangci-lint run ./... -> '0 issues.'. Integracao NAO executada: vet -tags=integration compila as tags mas nao sobe testcontainers, e o recorte nao toca data/postgres."
     }
   ],
   "pendencias": []

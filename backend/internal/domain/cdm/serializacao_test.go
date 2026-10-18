@@ -755,18 +755,23 @@ func TestPapelUnmarshalJSONNaoEcoaConteudoRecebido(t *testing.T) {
 func TestCitacaoAtravessaTodasAsPortasDePersistencia(t *testing.T) {
 	t.Parallel()
 
+	// A ORIGEM entra na tabela a partir do recorte f3-mutadores-por-papel: as
+	// duas citações diferem nos DOIS eixos, porque C1 passou a decidir a
+	// origem junto do papel. Afirmar OrigemEstiloDocx no subcaso do recuo
+	// documentava um estado que ClassificarPorEstiloDocx não produz mais.
 	for _, caso := range []struct {
 		nome      string
 		confianca float64
+		origem    Origem
 	}{
-		{nome: "citação por estilo nomeado (C2)", confianca: 0.95},
-		{nome: "citação pelo sinal de recuo (C3)", confianca: 0.5},
+		{nome: "citação por estilo nomeado (C2)", confianca: 0.95, origem: OrigemEstiloDocx},
+		{nome: "citação pelo sinal de recuo (C3)", confianca: 0.5, origem: OrigemHeuristica},
 	} {
 		caso := caso
 		t.Run(caso.nome, func(t *testing.T) {
 			t.Parallel()
 
-			bloco, err := NovoBloco(Citacao, "Trecho citado em bloco.", caso.confianca, OrigemEstiloDocx, 4)
+			bloco, err := NovoBloco(Citacao, "Trecho citado em bloco.", caso.confianca, caso.origem, 4)
 			require.NoError(t, err, "NovoBloco é a primeira porta: Citacao precisa ser papel aceito pelo domínio")
 
 			indice := NovoIndice([]Bloco{bloco})
@@ -779,7 +784,8 @@ func TestCitacaoAtravessaTodasAsPortasDePersistencia(t *testing.T) {
 				"o round-trip precisa preservar papel, confiança e origem: entrada=%+v saida=%+v", bloco, saida.Blocos[0])
 			assert.Equal(t, Citacao, saida.Blocos[0].Papel)
 			assert.Equal(t, caso.confianca, saida.Blocos[0].Confianca)
-			assert.Equal(t, OrigemEstiloDocx, saida.Blocos[0].Origem)
+			assert.Equal(t, caso.origem, saida.Blocos[0].Origem,
+				"o round-trip é agnóstico à origem, mas a tabela passa a cobrir as DUAS que a camada 1 emite")
 		})
 	}
 }

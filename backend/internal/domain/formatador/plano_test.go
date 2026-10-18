@@ -315,3 +315,390 @@ func TestPlanejarNaoVazaTextoDoUsuarioNoErro(t *testing.T) {
 		})
 	}
 }
+
+// ---------------------------------------------------------------------------
+// RECORTE f3-mutadores-por-papel — C3, critérios A5 a A10
+//
+// O PISO DE AUTORIZAÇÃO mora aqui, em Planejar, que é a porta de validação do
+// fluxo e domínio puro. A regra é uma disjunção de dois termos:
+//
+//	autorizado := bloco.Origem == cdm.OrigemEstiloDocx || bloco.Origem == cdm.OrigemUsuario
+//
+// Origem declarada pelo documento, ou confirmada pelo humano. Detecção por
+// recuo, por região, por regra textual e palpite de LLM NUNCA autorizam —
+// ainda que a confiança seja alta. Por isso o piso é por ORIGEM e não por
+// limiar de confiança: A8 é o caso que separa as duas leituras.
+//
+// Bloco com papel declarado e origem não autorizada fica fora do plano
+// INTEIRO: como ReferenciasCorpo segue exigindo Papel == cdm.Paragrafo,
+// nenhum mutador o alcança e o parágrafo sai como o autor escreveu.
+// ---------------------------------------------------------------------------
+
+// blocoOrigem monta a entrada do índice nomeando confiança e origem, que são
+// justamente os dois eixos que C3 separa.
+func blocoOrigem(papel cdm.Papel, refXML int, confianca float64, origem cdm.Origem) cdm.Bloco {
+	return cdm.Bloco{
+		Papel:       papel,
+		TextoResumo: "texto qualquer",
+		Confianca:   confianca,
+		Origem:      origem,
+		RefXML:      refXML,
+	}
+}
+
+func definicaoComEntrelinhaPorPapel(medidas map[string]float64) ruleset.Definicao {
+	definicao := definicaoSintetica()
+	definicao.EntrelinhaPorPapel = medidas
+	return definicao
+}
+
+// conferirConjuntosDisjuntos é o invariante estrutural de C3: os grupos são
+// dois a dois disjuntos e disjuntos de ReferenciasCorpo. Um ordinal em dois
+// conjuntos produziria duas AplicarEntrelinha sobre o mesmo w:p, a segunda
+// sobrescrevendo a primeira em silêncio.
+func conferirConjuntosDisjuntos(t *testing.T, plano Plano) {
+	t.Helper()
+
+	visto := map[int]string{}
+	for _, referencia := range plano.ReferenciasCorpo {
+		visto[referencia] = "ReferenciasCorpo"
+	}
+	for _, grupo := range plano.EntrelinhaPorPapel {
+		assert.NotEmpty(t, grupo.Referencias, "C3: grupo sem bloco autorizado não pode ser emitido")
+		assert.IsIncreasing(t, append([]int(nil), grupo.Referencias...),
+			"C3: as referências de cada grupo saem em ordem crescente")
+		for _, referencia := range grupo.Referencias {
+			dono, repetido := visto[referencia]
+			assert.False(t, repetido, "C3: o ordinal %d está em %s e também no grupo %s", referencia, dono, grupo.Papel)
+			visto[referencia] = "grupo " + grupo.Papel.String()
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// A5 — TERMO 1 do piso: OrigemEstiloDocx
+// ---------------------------------------------------------------------------
+
+func TestPlanejarAutorizaOrigemDeclaradaPeloDocumento(t *testing.T) {
+	definicao := definicaoComEntrelinhaPorPapel(map[string]float64{"citacao": 1.0})
+	require.NoError(t, definicao.Validar(), "pré-condição: a definição do caso precisa ser válida")
+
+	indice := indiceValido(
+		blocoOrigem(cdm.Paragrafo, 0, 0.95, cdm.OrigemEstiloDocx),
+		blocoOrigem(cdm.Paragrafo, 1, 0.95, cdm.OrigemEstiloDocx),
+		blocoOrigem(cdm.Citacao, 3, 0.95, cdm.OrigemEstiloDocx),
+	)
+	require.NoError(t, indice.Validar(), "pré-condição: o índice do caso precisa ser válido")
+
+	plano, err := Planejar(indice, definicao)
+	require.NoError(t, err)
+
+	assert.Equal(t, []GrupoEntrelinha{{Papel: cdm.Citacao, Entrelinha: 1.0, Referencias: []int{3}}},
+		plano.EntrelinhaPorPapel,
+		"A5: remover o termo OrigemEstiloDocx da disjunção derruba este caso")
+	assert.Equal(t, []int{0, 1}, plano.ReferenciasCorpo, "A5: a citação sai de ReferenciasCorpo e vira grupo próprio")
+	conferirConjuntosDisjuntos(t, plano)
+}
+
+// ---------------------------------------------------------------------------
+// A6 — TERMO 2 do piso: OrigemUsuario, o estado que o PATCH grava
+// ---------------------------------------------------------------------------
+
+func TestPlanejarAutorizaOrigemConfirmadaPeloHumano(t *testing.T) {
+	definicao := definicaoComEntrelinhaPorPapel(map[string]float64{"legenda": 1.0})
+	require.NoError(t, definicao.Validar(), "pré-condição: a definição do caso precisa ser válida")
+
+	// Confiança 1 e OrigemUsuario é exatamente o que
+	// ServicoEstrutura.Corrigir grava: é o único caminho pelo qual Legenda,
+	// Referencia e NotaRodape chegam hoje ao motor.
+	indice := indiceValido(blocoOrigem(cdm.Legenda, 5, 1, cdm.OrigemUsuario))
+	require.NoError(t, indice.Validar(), "pré-condição: o índice do caso precisa ser válido")
+
+	plano, err := Planejar(indice, definicao)
+	require.NoError(t, err)
+
+	assert.Equal(t, []GrupoEntrelinha{{Papel: cdm.Legenda, Entrelinha: 1.0, Referencias: []int{5}}},
+		plano.EntrelinhaPorPapel,
+		"A6: remover o termo OrigemUsuario derruba este caso, e nenhum dos dois termos sozinho satisfaz A5 e A6 ao mesmo tempo")
+	assert.Empty(t, plano.ReferenciasCorpo)
+}
+
+// ---------------------------------------------------------------------------
+// A7 — recuo não autoriza, e o ordinal fica fora do plano INTEIRO
+// ---------------------------------------------------------------------------
+
+func TestPlanejarNaoAutorizaCitacaoDetectadaSoPeloRecuo(t *testing.T) {
+	definicao := definicaoComEntrelinhaPorPapel(map[string]float64{"citacao": 1.0})
+	require.NoError(t, definicao.Validar(), "pré-condição: a definição do caso precisa ser válida")
+
+	const ordinalDoRecuo = 2
+
+	// Citacao/0,5/OrigemHeuristica é o que ClassificarPorEstiloDocx passa a
+	// emitir para parágrafo recuado sem estilo (C1).
+	indice := indiceValido(
+		blocoOrigem(cdm.Paragrafo, 1, 0.95, cdm.OrigemEstiloDocx),
+		blocoOrigem(cdm.Citacao, ordinalDoRecuo, 0.5, cdm.OrigemHeuristica),
+		blocoOrigem(cdm.Paragrafo, 3, 0.95, cdm.OrigemEstiloDocx),
+	)
+	require.NoError(t, indice.Validar(), "pré-condição: o índice do caso precisa ser válido")
+
+	plano, err := Planejar(indice, definicao)
+	require.NoError(t, err)
+
+	assert.Empty(t, plano.EntrelinhaPorPapel,
+		"A7: mata o mutante que amplia o piso para OrigemHeuristica")
+	assert.Equal(t, []int{1, 3}, plano.ReferenciasCorpo)
+	assert.NotContains(t, plano.ReferenciasCorpo, ordinalDoRecuo,
+		"A7: o ordinal não aparece em NENHUM conjunto do plano, logo nenhum mutador o alcança e o parágrafo do autor fica como ele escreveu")
+	conferirConjuntosDisjuntos(t, plano)
+}
+
+// ---------------------------------------------------------------------------
+// A8 — dois mutantes que só este critério mata
+// ---------------------------------------------------------------------------
+
+func TestPlanejarRecusaOrigensAutomaticasAindaQueComConfiancaAlta(t *testing.T) {
+	casos := []struct {
+		nome      string
+		medidas   map[string]float64
+		blocos    []cdm.Bloco
+		mutante   string
+		sobrevive string
+	}{
+		{
+			nome:    "(a) região (0,6) e regra textual (0,8) são palpite, não declaração",
+			medidas: map[string]float64{"referencia": 1.0, "legenda": 1.0, "nota_rodape": 1.0},
+			blocos: []cdm.Bloco{
+				// 0,6 e 0,8 são os valores REAIS de confiancaRegiao e
+				// confiancaRegraTextual da camada 2.
+				blocoOrigem(cdm.Referencia, 4, 0.6, cdm.OrigemHeuristica),
+				blocoOrigem(cdm.Legenda, 6, 0.8, cdm.OrigemHeuristica),
+			},
+			mutante:   "trocar o piso por limiar de confiança (Confianca >= 0,6)",
+			sobrevive: "A5 (0,95), A6 (1) e A7 (0,5)",
+		},
+		{
+			nome:    "(b) palpite de LLM com confiança alta não autoriza",
+			medidas: map[string]float64{"citacao": 1.0},
+			// Confianca 0,95 com OrigemLLM é o estado que fallback.go:129
+			// grava quando o julgamento passa de LimiteAutomatico.
+			blocos:    []cdm.Bloco{blocoOrigem(cdm.Citacao, 2, 0.95, cdm.OrigemLLM)},
+			mutante:   "acrescentar || bloco.Origem == cdm.OrigemLLM",
+			sobrevive: "todos os outros critérios, e é imune a qualquer piso por confiança",
+		},
+	}
+	for _, caso := range casos {
+		t.Run(caso.nome, func(t *testing.T) {
+			definicao := definicaoComEntrelinhaPorPapel(caso.medidas)
+			require.NoError(t, definicao.Validar(), "pré-condição: a definição do caso precisa ser válida")
+
+			indice := indiceValido(caso.blocos...)
+			require.NoError(t, indice.Validar(), "pré-condição: o índice do caso precisa ser válido")
+			for _, bloco := range caso.blocos {
+				require.Contains(t, caso.medidas, bloco.Papel.String(),
+					"pré-condição: o papel do bloco PRECISA estar declarado na definição, senão o caso não alcança o piso de origem")
+			}
+
+			plano, err := Planejar(indice, definicao)
+			require.NoError(t, err)
+
+			assert.Empty(t, plano.EntrelinhaPorPapel,
+				"A8: mata o mutante %q, que sobrevive a %s", caso.mutante, caso.sobrevive)
+			assert.Empty(t, plano.ReferenciasCorpo, "A8: nenhum dos blocos do caso é Paragrafo")
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// A9 — regressão (chave ausente) e grupo vazio não emitido
+// ---------------------------------------------------------------------------
+
+func TestPlanejarSemChaveNovaEComPapelSemBlocoAutorizado(t *testing.T) {
+	indice := indiceValido(
+		blocoOrigem(cdm.Paragrafo, 0, 0.95, cdm.OrigemEstiloDocx),
+		blocoOrigem(cdm.Citacao, 1, 0.95, cdm.OrigemEstiloDocx),
+	)
+	require.NoError(t, indice.Validar(), "pré-condição: o índice do caso precisa ser válido")
+
+	t.Run("(a) definição sem a chave nova preserva o comportamento atual", func(t *testing.T) {
+		definicao := definicaoSintetica()
+		require.Nil(t, definicao.EntrelinhaPorPapel, "pré-condição: o perfil do caso é silente no campo novo")
+
+		plano, err := Planejar(indice, definicao)
+		require.NoError(t, err)
+
+		assert.Empty(t, plano.EntrelinhaPorPapel, "A9: norma silente preserva o documento")
+		assert.Equal(t, []int{0}, plano.ReferenciasCorpo, "A9: ReferenciasCorpo é idêntico ao comportamento atual")
+	})
+
+	t.Run("(b) papel declarado sem nenhum bloco autorizado não emite grupo", func(t *testing.T) {
+		definicao := definicaoComEntrelinhaPorPapel(map[string]float64{"nota_rodape": 1.0})
+		require.NoError(t, definicao.Validar())
+
+		plano, err := Planejar(indice, definicao)
+		require.NoError(t, err)
+
+		assert.Empty(t, plano.EntrelinhaPorPapel,
+			"A9: falsifica emitir grupo por papel DECLARADO em vez de por bloco AUTORIZADO")
+	})
+}
+
+// ---------------------------------------------------------------------------
+// A10 — determinismo da saída e propagação dos erros das duas fontes
+// ---------------------------------------------------------------------------
+
+func TestPlanejarGruposSaoDeterministicosEPropagamErro(t *testing.T) {
+	definicao := definicaoComEntrelinhaPorPapel(map[string]float64{"citacao": 1.0, "legenda": 1.0})
+	require.NoError(t, definicao.Validar(), "pré-condição: a definição do caso precisa ser válida")
+
+	// Fora de ordem crescente de RefXML, como o índice fica depois de uma
+	// correção do usuário.
+	indice := indiceValido(
+		blocoOrigem(cdm.Citacao, 9, 0.95, cdm.OrigemEstiloDocx),
+		blocoOrigem(cdm.Legenda, 7, 1, cdm.OrigemUsuario),
+		blocoOrigem(cdm.Citacao, 4, 0.95, cdm.OrigemEstiloDocx),
+		blocoOrigem(cdm.Paragrafo, 1, 0.95, cdm.OrigemEstiloDocx),
+	)
+	require.NoError(t, indice.Validar(), "pré-condição: o índice do caso precisa ser válido")
+
+	plano, err := Planejar(indice, definicao)
+	require.NoError(t, err)
+
+	// A ordenação por Papel.String() só é TOTAL porque a lista branca de C2
+	// exclui "secao": Secao(1) e Secao(2) têm o mesmo String(). Ampliar a
+	// lista branca obriga a chave de ordenação a incluir o nível.
+	assert.Equal(t, []GrupoEntrelinha{
+		{Papel: cdm.Citacao, Entrelinha: 1.0, Referencias: []int{4, 9}},
+		{Papel: cdm.Legenda, Entrelinha: 1.0, Referencias: []int{7}},
+	}, plano.EntrelinhaPorPapel, "A10: saída determinística, ordenada por Papel.String() crescente")
+	assert.Equal(t, []int{1}, plano.ReferenciasCorpo)
+	conferirConjuntosDisjuntos(t, plano)
+
+	t.Run("índice com RefXML repetido devolve a sentinela e Plano zero", func(t *testing.T) {
+		duplicado := cdm.Indice{Versao: cdm.VersaoFormatoCDM, Blocos: []cdm.Bloco{
+			blocoOrigem(cdm.Citacao, 4, 0.95, cdm.OrigemEstiloDocx),
+			blocoOrigem(cdm.Legenda, 4, 1, cdm.OrigemUsuario),
+		}}
+		require.Error(t, duplicado.Validar(), "pré-condição: o próprio cdm recusa este índice")
+
+		plano, err := Planejar(duplicado, definicao)
+		require.Error(t, err)
+		assert.True(t, errors.E(err, cdm.ErroRefXMLDuplicado),
+			"A10: a sentinela de corrupção segue identificável por errors.E; erro foi %v", err)
+		assert.Equal(t, Plano{}, plano, "A10: em erro o plano devolvido é o zero, inclusive sem grupos")
+	})
+
+	t.Run("definição inválida devolve *ErroValidacao e Plano zero", func(t *testing.T) {
+		invalida := definicao
+		// Margens que consomem a página: o erro é da definição, não do índice.
+		invalida.Pagina.Margens.EsquerdaCM = invalida.Pagina.LarguraCM
+		require.Error(t, invalida.Validar(), "pré-condição: o caso precisa alcançar a guarda de Definicao.Validar")
+
+		plano, err := Planejar(indice, invalida)
+		require.Error(t, err)
+		var validacao *errors.ErroValidacao
+		assert.True(t, errors.Como(err, &validacao), "A10: o *ErroValidacao da definição vira 400; erro foi %T", err)
+		assert.Equal(t, Plano{}, plano, "A10: em erro o plano devolvido é o zero, inclusive sem grupos")
+	})
+}
+
+// ---------------------------------------------------------------------------
+// C2/C3 — a lista branca só pode conter PAPEL SEM NÍVEL
+//
+// Achado da segurança: duas coisas dependiam disso só por comentário
+// (ruleset/definicao.go:41-54 e plano.go:110-116) e nenhuma estava travada por
+// teste. Quem ampliasse a lista branca quebraria as duas de uma vez:
+//
+//   - a ordenação dos grupos por Papel.String() deixa de ser TOTAL, porque
+//     Secao(1) e Secao(2) colapsam na mesma chave — e `porPapel` é indexado
+//     por String(), então os dois níveis cairiam no MESMO grupo;
+//   - cdm.ParaPapel(nome, 0) de plano.go:124 passa a FALHAR, porque Secao
+//     exige nível 1..6, e Planejar devolve erro em vez de plano.
+//
+// O enunciado é a propriedade, não "não contém secao": toda chave que a lista
+// branca aceita precisa ser um papel SEM NÍVEL cujo String() volta igual à
+// chave. Isso mata, de uma vez, ampliar a lista para "secao" e grafar a chave
+// de forma que não bata com Papel.String() (por exemplo "nota-rodape").
+//
+// A propriedade é afirmada AQUI, e não em domain/ruleset, porque é o único
+// pacote que vê ruleset E cdm ao mesmo tempo: a lista branca é literal justo
+// para o domínio não ganhar a aresta ruleset -> cdm (C2).
+// ---------------------------------------------------------------------------
+
+func TestListaBrancaDeEntrelinhaSoAceitaPapelSemNivel(t *testing.T) {
+	// Todos os nomes de papel que cdm define, mais "secao". A lista é literal
+	// porque cdm não exporta o conjunto; se um papel novo aparecer lá e não
+	// aqui, este teste não o cobre — e é por isso que a asserção de CONTAGEM
+	// abaixo existe, para flagrar a lista branca crescendo sem este teste
+	// acompanhar.
+	candidatos := []string{
+		"titulo", "lista_autores", "resumo", "palavras_chave", "paragrafo",
+		"citacao", "item_lista", "tabela", "figura", "legenda", "equacao",
+		"referencia", "nota_rodape", "secao",
+	}
+	require.Contains(t, candidatos, "secao",
+		"pré-condição: sem 'secao' entre os candidatos o teste não alcança a guarda que pretende provar")
+	// Pré-condição que torna o mutante VISÍVEL: é esta chamada que
+	// agruparPorPapel faz, e é ela que quebra se "secao" entrar na lista.
+	_, err := cdm.ParaPapel("secao", 0)
+	require.Error(t, err, "pré-condição: cdm.Secao exige nível 1..6, logo ParaPapel(\"secao\", 0) é um erro")
+
+	var aceitos []string
+	for _, nome := range candidatos {
+		definicao := definicaoComEntrelinhaPorPapel(map[string]float64{nome: 1.0})
+		if definicao.Validar() != nil {
+			continue
+		}
+		aceitos = append(aceitos, nome)
+
+		papel, err := cdm.ParaPapel(nome, 0)
+		require.NoErrorf(t, err, "a lista branca aceita %q, mas cdm.ParaPapel(%q, 0) falha: agruparPorPapel devolveria erro em vez de plano", nome, nome)
+		assert.Zerof(t, papel.Nivel(), "a lista branca aceita %q, que carrega nível: a ordenação por Papel.String() deixa de ser total", nome)
+		assert.Equalf(t, nome, papel.String(), "a chave %q não é o Papel.String() usado para agrupar: o grupo nasceria vazio em silêncio", nome)
+	}
+
+	assert.Equal(t, []string{"citacao", "legenda", "referencia", "nota_rodape"}, aceitos,
+		"os quatro papéis de exceção da §5.2, nem um mais: ampliar a lista branca exige revisar a chave de ordenação dos grupos")
+}
+
+// ---------------------------------------------------------------------------
+// A disjunção é TEOREMA de Planejar, inclusive sob índice adversarial
+//
+// conferirConjuntosDisjuntos já roda em A5, A7 e A10. Aqui ele roda sobre o
+// índice mais hostil que o tipo cdm.Indice admite com RefXML único: os quatro
+// papéis declarados, parágrafos intercalados, origens misturadas e dois
+// níveis de seção, que é a forma que colapsaria se "secao" entrasse na lista
+// branca.
+// ---------------------------------------------------------------------------
+
+func TestPlanejarMantemDisjuncaoSobIndiceAdversarial(t *testing.T) {
+	definicao := definicaoComEntrelinhaPorPapel(map[string]float64{
+		"citacao": 1.0, "referencia": 1.0, "legenda": 1.0, "nota_rodape": 1.0,
+	})
+	require.NoError(t, definicao.Validar(), "pré-condição: a definição do caso precisa ser válida")
+
+	indice := indiceValido(
+		blocoOrigem(cdm.Secao(1), 0, 0.95, cdm.OrigemEstiloDocx),
+		blocoOrigem(cdm.Citacao, 8, 0.95, cdm.OrigemEstiloDocx),
+		blocoOrigem(cdm.Paragrafo, 1, 0.2, cdm.OrigemEstiloDocx),
+		blocoOrigem(cdm.Referencia, 7, 1, cdm.OrigemUsuario),
+		blocoOrigem(cdm.Secao(2), 2, 0.95, cdm.OrigemEstiloDocx),
+		blocoOrigem(cdm.Legenda, 6, 0.8, cdm.OrigemHeuristica),
+		blocoOrigem(cdm.Citacao, 5, 0.5, cdm.OrigemHeuristica),
+		blocoOrigem(cdm.Paragrafo, 3, 0.95, cdm.OrigemEstiloDocx),
+		blocoOrigem(cdm.NotaRodape, 4, 1, cdm.OrigemUsuario),
+	)
+	require.NoError(t, indice.Validar(), "pré-condição: o índice do caso precisa ser válido")
+
+	plano, err := Planejar(indice, definicao)
+	require.NoError(t, err, "as duas seções não podem fazer Planejar falhar: 'secao' está fora da lista branca")
+
+	conferirConjuntosDisjuntos(t, plano)
+	assert.Equal(t, []int{1, 3}, plano.ReferenciasCorpo)
+	assert.Equal(t, []GrupoEntrelinha{
+		{Papel: cdm.Citacao, Entrelinha: 1.0, Referencias: []int{8}},
+		{Papel: cdm.NotaRodape, Entrelinha: 1.0, Referencias: []int{4}},
+		{Papel: cdm.Referencia, Entrelinha: 1.0, Referencias: []int{7}},
+	}, plano.EntrelinhaPorPapel,
+		"os blocos de origem heurística (legenda 0,8 e citação 0,5) ficam fora do plano inteiro, e nenhum grupo de seção é emitido")
+}

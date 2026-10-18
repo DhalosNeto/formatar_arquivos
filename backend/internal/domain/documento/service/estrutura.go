@@ -42,6 +42,14 @@ func (s *ServicoEstrutura) Corrigir(ctx context.Context, dono vo.Dono, id uuid.U
 	if !papel.Valido() {
 		return cdm.Indice{}, errors.NovoErroValidacao("papel", "papel desconhecido ou seção fora da faixa 1..6")
 	}
+	// Transição PARA Tabela, recusada ANTES de qualquer I/O: cdm.Tabela
+	// significa "este bloco é um w:tbl", e nenhum escritor de Papel o produz
+	// para outra forma de nó — invariante sustentada por construção, não
+	// verificada aqui. Marcar o ordinal de um w:p como Tabela tiraria o bloco
+	// de ReferenciasCorpo e da formatação, em silêncio.
+	if papel == cdm.Tabela {
+		return cdm.Indice{}, erroPapelTabela()
+	}
 	documento, err := s.repositorio.ObterPorID(ctx, dono, id)
 	if err != nil {
 		return cdm.Indice{}, errors.Envolver(err, "obter documento para corrigir estrutura")
@@ -73,6 +81,13 @@ func (s *ServicoEstrutura) Corrigir(ctx context.Context, dono vo.Dono, id uuid.U
 	if alvo < 0 {
 		return cdm.Indice{}, errors.NovoErroValidacao("ref_xml", "a referência não corresponde a um bloco da estrutura")
 	}
+	// Transição DE Tabela, recusada depois de localizar o alvo porque é o
+	// bloco gravado que decide, não o pedido. Tirar o papel Tabela de um w:tbl
+	// o levaria a ReferenciasCorpo, e o primeiro mutador recusaria o alvo que
+	// não é w:p — falhando o job e travando o par (documento, perfil).
+	if indice.Blocos[alvo].Papel == cdm.Tabela {
+		return cdm.Indice{}, erroPapelTabela()
+	}
 	indice.Blocos[alvo], err = indice.Blocos[alvo].Reclassificar(papel, 1, cdm.OrigemUsuario)
 	if err != nil {
 		return cdm.Indice{}, errors.Envolver(err, "reclassificar bloco")
@@ -92,4 +107,10 @@ func (s *ServicoEstrutura) Corrigir(ctx context.Context, dono vo.Dono, id uuid.U
 		return cdm.Indice{}, errors.Envolver(err, "salvar estrutura corrigida")
 	}
 	return indice, nil
+}
+
+// erroPapelTabela é a recusa das duas transições de C5. Uma função só porque a
+// mensagem é a mesma e o campo precisa continuar sendo "papel" nos dois lados.
+func erroPapelTabela() error {
+	return errors.NovoErroValidacao("papel", "o papel tabela acompanha a forma do bloco e não pode ser corrigido")
 }

@@ -3,6 +3,8 @@ package ruleset
 import (
 	"encoding/json"
 	"math"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
@@ -376,4 +378,126 @@ func chavesOrdenadas(objeto map[string]any) []string {
 	}
 	sort.Strings(chaves)
 	return chaves
+}
+
+// ---------------------------------------------------------------------------
+// RECORTE f3-mutadores-por-papel — C2, critérios A3 e A4
+//
+// EntrelinhaPorPapel é o campo novo, OPCIONAL, irmão de Pagina e Corpo. Duas
+// coisas são contrato e não estilo:
+//
+//  1. `omitempty`: inserirRuleset compara definicao=$4::jsonb e o checksum é
+//     sha256 do json.Marshal. A Definicao lida de um perfil JÁ SEMEADO precisa
+//     continuar serializando SEM a chave nova, senão um re-seed da mesma
+//     versão bate em conflito contra uma versão imutável (A3).
+//  2. A lista branca é LITERAL e tem só os quatro papéis de exceção da §5.2.
+//     Delegar a cdm.ParaPapel aceitaria "paragrafo" — grupo idêntico a
+//     ReferenciasCorpo, duas AplicarEntrelinha sobre os mesmos ordinais, a
+//     segunda sobrescrevendo em silêncio — e "tabela", que colocaria todo
+//     ordinal w:tbl no plano para o mutador recusar, brickando qualquer
+//     documento com tabela sem ação humana nenhuma (A4).
+// ---------------------------------------------------------------------------
+
+func TestDefinicaoSemEntrelinhaPorPapelNaoMudaOJSONDoPerfilSemeado(t *testing.T) {
+	caminho := filepath.Join("..", "..", "..", "rulesets", "abnt-14724", "v1.yaml")
+	conteudo, err := os.ReadFile(caminho)
+	require.NoError(t, err, "A3: o perfil semeado %s precisa existir", caminho)
+	require.NotContains(t, string(conteudo), "entrelinha_por_papel",
+		"pré-condição de A3: o arquivo é IMUTÁVEL e não declara a chave nova; se declarasse, o critério não mediria omitempty")
+
+	var definicao Definicao
+	require.NoError(t, yaml.Unmarshal(conteudo, &definicao))
+	require.NoError(t, definicao.Validar(), "A3: a ausência da chave é perfil válido")
+
+	assert.Nil(t, definicao.EntrelinhaPorPapel, "A3: chave ausente no YAML produz nil, não mapa vazio")
+
+	serializado, err := json.Marshal(definicao)
+	require.NoError(t, err)
+	assert.NotContains(t, string(serializado), "entrelinha_por_papel",
+		"A3: sem omitempty o jsonb e o checksum da versão já semeada mudam, e o re-seed bate em conflito")
+
+	t.Run("mapa vazio equivale a ausência", func(t *testing.T) {
+		vazia := definicao
+		vazia.EntrelinhaPorPapel = map[string]float64{}
+		require.NoError(t, vazia.Validar())
+
+		serializado, err := json.Marshal(vazia)
+		require.NoError(t, err)
+		assert.NotContains(t, string(serializado), "entrelinha_por_papel",
+			"C2: mapa vazio é 'a norma é silente', e precisa sair do JSON como a ausência sai")
+	})
+}
+
+func TestDefinicaoEntrelinhaPorPapelAceitaSoOsQuatroPapeisDeExcecao(t *testing.T) {
+	aceitos := []struct {
+		nome  string
+		valor map[string]float64
+	}{
+		{"citacao", map[string]float64{"citacao": 1.0}},
+		{"referencia", map[string]float64{"referencia": 1.0}},
+		{"legenda", map[string]float64{"legenda": 1.0}},
+		{"nota_rodape", map[string]float64{"nota_rodape": 1.0}},
+		{"os quatro juntos", map[string]float64{"citacao": 1.0, "referencia": 1.0, "legenda": 1.0, "nota_rodape": 1.0}},
+	}
+	for _, caso := range aceitos {
+		t.Run("aceito: "+caso.nome, func(t *testing.T) {
+			definicao := definicaoSintetica()
+			definicao.EntrelinhaPorPapel = caso.valor
+			assert.NoError(t, definicao.Validar(), "A4: os quatro papéis de exceção da §5.2 são os aceitos")
+		})
+	}
+
+	rejeitados := []struct {
+		nome  string
+		valor map[string]float64
+		campo string
+	}{
+		{
+			// Grupo idêntico a ReferenciasCorpo: falsificaria a disjunção que
+			// C3 afirma como teorema e produziria duas AplicarEntrelinha sobre
+			// os mesmos ordinais, a segunda sobrescrevendo em silêncio.
+			nome:  "paragrafo quebraria a disjunção de C3",
+			valor: map[string]float64{"paragrafo": 1.0},
+			campo: "entrelinha_por_papel",
+		},
+		{
+			// Todo ordinal w:tbl entraria no plano e o mutador recusaria o
+			// alvo: documento com tabela ficaria permanentemente inviável.
+			nome:  "tabela brickaria todo documento com tabela",
+			valor: map[string]float64{"tabela": 1.0},
+			campo: "entrelinha_por_papel",
+		},
+		{"secao, de que a ordenação total de C3 depende", map[string]float64{"secao": 1.0}, "entrelinha_por_papel"},
+		{"titulo", map[string]float64{"titulo": 1.0}, "entrelinha_por_papel"},
+		{"citação acentuada não é a chave", map[string]float64{"citação": 1.0}, "entrelinha_por_papel"},
+		{"chave vazia", map[string]float64{"": 1.0}, "entrelinha_por_papel"},
+		{"medida zero", map[string]float64{"citacao": 0}, "corpo"},
+		{"medida negativa", map[string]float64{"citacao": -1}, "corpo"},
+		{"medida NaN", map[string]float64{"citacao": math.NaN()}, "corpo"},
+		{"medida +Inf", map[string]float64{"citacao": math.Inf(1)}, "corpo"},
+		{"medida que arredonda para zero unidade", map[string]float64{"citacao": 0.49 / 240}, "corpo"},
+		{
+			// Os DOIS defeitos no mesmo mapa. Só é afirmável porque a lista
+			// branca varre TODAS as chaves antes de qualquer medida de valor:
+			// se a varredura fosse intercalada, o campo devolvido dependeria
+			// da ordem de iteração do mapa e a asserção seria instável.
+			nome:  "chave fora da lista branca vence a medida inválida, independente da ordem do mapa",
+			valor: map[string]float64{"paragrafo": 1.0, "citacao": 0},
+			campo: "entrelinha_por_papel",
+		},
+	}
+	for _, caso := range rejeitados {
+		t.Run("rejeitado: "+caso.nome, func(t *testing.T) {
+			definicao := definicaoSintetica()
+			require.NoError(t, definicao.Validar(),
+				"pré-condição: só o campo novo pode reprovar neste caso")
+			definicao.EntrelinhaPorPapel = caso.valor
+
+			// O campo "corpo" nas medidas é HERDADO de ValidarEntrelinha, de
+			// propósito, para não duplicar o validador. É mensagem enganosa
+			// para quem consome o 400 no front, e por isso está registrada em
+			// docs/contrato-api.md.
+			exigirCampoInvalido(t, definicao.Validar(), caso.campo)
+		})
+	}
 }

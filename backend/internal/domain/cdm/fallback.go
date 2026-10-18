@@ -84,7 +84,13 @@ func (f *Fallback) Aplicar(ctx context.Context, blocos []Bloco) (Indice, error) 
 	}
 	candidatos := make([]Bloco, 0)
 	for _, bloco := range indice.Blocos {
-		if bloco.Origem != OrigemUsuario && bloco.Origem != OrigemLLM && bloco.Confianca < f.politica.LimiteConsulta {
+		// Papel != Tabela é o LADO DO CANDIDATO da invariante Tabela <=> w:tbl,
+		// que este pacote sustenta POR CONSTRUÇÃO e não verifica em runtime:
+		// ClassificarPorEstiloDocx só emite Tabela pela forma do nó, então o
+		// classificador não pode ser convidado a tirar esse papel. O termo não
+		// é redundante com a confiança: o w:tbl sai com 0,95, e LimiteConsulta
+		// configurado acima disso o tornaria candidato.
+		if bloco.Papel != Tabela && bloco.Origem != OrigemUsuario && bloco.Origem != OrigemLLM && bloco.Confianca < f.politica.LimiteConsulta {
 			candidatos = append(candidatos, bloco)
 		}
 	}
@@ -159,7 +165,14 @@ func validarJulgamentos(candidatos []Bloco, julgamentos []JulgamentoEstrutura) (
 		if _, existe := resultado[j.RefXML]; existe || !finitoEntreZeroEUm(j.Confianca) {
 			return nil, false
 		}
-		if !j.SemCorrespondencia && !j.Papel.Valido() {
+		// Papel Tabela é o LADO DA ESCRITA da mesma invariante: afirmar que um
+		// bloco já excluído do papel Tabela é uma tabela viola o protocolo,
+		// não é confiança baixa. Daí a recusa ficar aqui, junto de
+		// !j.Papel.Valido(), e não
+		// por julgamento em Aplicar: reprova o LOTE, como qualquer resposta
+		// malformada. Consequência aceita: os outros candidatos do lote perdem
+		// a reclassificação automática e saem como revisão.
+		if !j.SemCorrespondencia && (!j.Papel.Valido() || j.Papel == Tabela) {
 			return nil, false
 		}
 		resultado[j.RefXML] = j

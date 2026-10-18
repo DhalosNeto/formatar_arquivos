@@ -174,3 +174,114 @@ func TestNovoFallbackRejeitaDependenciaELimitesInvalidos(t *testing.T) {
 		require.Error(t, err)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// RECORTE f3-mutadores-por-papel — C6, critérios A19 e A20
+//
+// VEDAR AS FONTES NÃO ESTRUTURAIS DE cdm.Tabela. São DUAS condições, em lados
+// DIFERENTES, e por isso dois critérios:
+//
+//	(a) LADO DA ESCRITA — julgamento com Papel == Tabela é recusado em
+//	    validarJulgamentos, ao lado de !j.Papel.Valido(), ANTES de qualquer
+//	    Reclassificar. Um classificador que afirma "este w:p é uma tabela"
+//	    viola o protocolo; não está com confiança baixa.
+//	(b) LADO DO CANDIDATO — o filtro de candidatos passa a exigir
+//	    bloco.Papel != Tabela, fechando o residual de configuração.
+//
+// Juntas sustentam POR CONSTRUÇÃO a invariante Tabela <=> w:tbl, de que a
+// guarda de C5 (recusa de transição de/para Tabela no PATCH) depende.
+// ---------------------------------------------------------------------------
+
+func TestFallbackJulgamentoTabelaReprovaOLoteInteiro(t *testing.T) {
+	const (
+		refCitacaoPorRecuo = 10
+		refParagrafo       = 11
+	)
+
+	blocos := []Bloco{
+		{Papel: Citacao, TextoResumo: "citação por recuo", Confianca: 0.5, Origem: OrigemHeuristica, RefXML: refCitacaoPorRecuo},
+		{Papel: Paragrafo, TextoResumo: "parágrafo sem estilo", Confianca: 0.2, Origem: OrigemEstiloDocx, RefXML: refParagrafo},
+	}
+	antes := append([]Bloco(nil), blocos...)
+
+	politica := politicaDefaultDeProducao()
+	const confiancaAcimaDoAutomatico = 0.96
+	require.GreaterOrEqual(t, confiancaAcimaDoAutomatico, politica.LimiteAutomatico,
+		"pré-condição: os dois julgamentos passam de LimiteAutomatico, logo SEM a recusa os dois blocos seriam reclassificados")
+
+	fake := &classificadorEstruturaFake{resposta: []JulgamentoEstrutura{
+		// O julgamento que viola o protocolo: w:p declarado Tabela.
+		{RefXML: refCitacaoPorRecuo, Papel: Tabela, Confianca: confiancaAcimaDoAutomatico},
+		// O julgamento VÁLIDO. A asserção sobre ELE é o que fixa ONDE o termo
+		// mora: uma recusa posta em Aplicar depois da linha 122, por bloco,
+		// não reprovaria o lote e deixaria este candidato reclassificado —
+		// passando se a asserção fosse apenas "nenhum bloco com OrigemLLM".
+		{RefXML: refParagrafo, Papel: Titulo, Confianca: confiancaAcimaDoAutomatico},
+	}}
+
+	fallback, err := NovoFallback(fake, politica)
+	require.NoError(t, err)
+	indice, err := fallback.Aplicar(context.Background(), blocos)
+	require.NoError(t, err)
+	require.Equal(t, 1, fake.chamadas)
+	require.Len(t, fake.entrada, 2, "pré-condição: os dois blocos precisam ter sido consultados, senão o caso não exercita o lote")
+
+	require.Equal(t, antes, indice.Blocos,
+		"A19: nenhuma das duas entradas muda Papel, Confianca ou Origem — remover o termo de validarJulgamentos faria o w:p virar Tabela/OrigemLLM e derrubaria a invariante de C5")
+	for _, bloco := range indice.Blocos {
+		require.NotEqual(t, OrigemLLM, bloco.Origem)
+		require.NotEqual(t, Tabela, bloco.Papel)
+	}
+
+	require.Len(t, indice.Revisoes, 2, "A19: o lote inteiro perde a reclassificação automática")
+	for _, revisao := range indice.Revisoes {
+		require.Equal(t, acaoRevisar, revisao.Acao)
+		require.Equal(t, motivoRespostaClassificadorInvalida, revisao.Motivo,
+			"A19: inclusive o candidato de julgamento VÁLIDO sai como revisão por resposta inválida")
+	}
+	require.ElementsMatch(t, []int{refCitacaoPorRecuo, refParagrafo},
+		[]int{indice.Revisoes[0].RefXML, indice.Revisoes[1].RefXML})
+}
+
+func TestFallbackNaoConsultaBlocoTabelaMesmoComLimiteDeConsultaAlto(t *testing.T) {
+	const (
+		refTabela    = 20
+		refParagrafo = 21
+	)
+
+	// LADO DO CANDIDATO: exige limite configurado alto para exercitar algo.
+	// Com o default 0,7 o caso não exercitaria nada, porque 0,95 já excluiria
+	// o bloco por CONFIANÇA — o limite alto é o que isola o termo novo.
+	politica := PoliticaConfianca{LimiteConsulta: 0.96, LimiteConfirmacao: 0.97, LimiteAutomatico: 0.99}
+
+	blocos := []Bloco{
+		// Tabela/0,95/OrigemEstiloDocx é o que ClassificarPorEstiloDocx emite
+		// para w:tbl.
+		{Papel: Tabela, TextoResumo: "conteúdo da tabela", Confianca: 0.95, Origem: OrigemEstiloDocx, RefXML: refTabela},
+		{Papel: Paragrafo, TextoResumo: "parágrafo sem estilo", Confianca: 0.2, Origem: OrigemEstiloDocx, RefXML: refParagrafo},
+	}
+	antes := append([]Bloco(nil), blocos...)
+
+	require.Less(t, blocos[0].Confianca, politica.LimiteConsulta,
+		"pré-condição: sem o termo novo, 0,95 < LimiteConsulta 0,96 tornaria o w:tbl candidato e o LLM poderia marcá-lo Paragrafo/OrigemLLM, entrando em ReferenciasCorpo SEM passar por C5")
+
+	fake := &classificadorEstruturaFake{classificar: func(entrada []Bloco) []JulgamentoEstrutura {
+		julgamentos := make([]JulgamentoEstrutura, 0, len(entrada))
+		for _, bloco := range entrada {
+			julgamentos = append(julgamentos, JulgamentoEstrutura{RefXML: bloco.RefXML, SemCorrespondencia: true})
+		}
+		return julgamentos
+	}}
+	fallback, err := NovoFallback(fake, politica)
+	require.NoError(t, err)
+	indice, err := fallback.Aplicar(context.Background(), blocos)
+	require.NoError(t, err)
+
+	require.Len(t, fake.entrada, 1, "A20: a slice de candidatos capturada pelo fake tem exatamente um elemento")
+	require.Equal(t, refParagrafo, fake.entrada[0].RefXML, "A20: e nunca o bloco Tabela")
+
+	require.Equal(t, antes, indice.Blocos, "A20: o bloco Tabela sai sem reclassificação")
+	for _, revisao := range indice.Revisoes {
+		require.NotEqual(t, refTabela, revisao.RefXML, "A20: o bloco Tabela sai sem revisão")
+	}
+}

@@ -735,7 +735,13 @@ func TestClassificarPorEstiloDocxRecuoAcimaDoLimiarViraCitacao(t *testing.T) {
 			assert.Equal(t, cdm.Citacao, bloco.Papel)
 			assert.Equal(t, confiancaRecuoCitacaoEsperada, bloco.Confianca,
 				"recuo é evidência mais fraca que estilo nomeado, e precisa ficar ABAIXO de LimiteConsulta (0,7) para o bloco seguir candidato ao fallback")
-			assert.Equal(t, cdm.OrigemEstiloDocx, bloco.Origem)
+			// RECORTE f3-mutadores-por-papel, A1: a asserção foi INVERTIDA.
+			// Origem deixou de significar "qual camada rodou" e passou a
+			// significar "que tipo de evidência sustenta o papel": recuo é
+			// palpite geométrico, não declaração do documento, e por isso não
+			// pode satisfazer o piso de autorização de C3.
+			assert.Equal(t, cdm.OrigemHeuristica, bloco.Origem,
+				"A1: o caminho do RECUO é palpite automático; OrigemEstiloDocx aqui autorizaria um mutador a reescrever parágrafo do autor com base em 0,5 de confiança")
 		})
 	}
 }
@@ -884,4 +890,108 @@ func TestClassificarCitacaoNaoVazaConteudoDoDocumentoParaErroOuLog(t *testing.T)
 
 	assert.NotContains(t, registro.String(), marca,
 		"conteúdo de documento do usuário não pode ir para log, nem pelo caminho novo de classificação de citação (regra 7)")
+}
+
+// ---------------------------------------------------------------------------
+// RECORTE f3-mutadores-por-papel — C1, critérios A1 e A2
+//
+// A ORIGEM passa a ser decidida junto do papel, e não gravada de forma fixa
+// em todos os caminhos. O que o par (papel, origem) significa:
+//
+//   OrigemEstiloDocx — o documento DECLARA o papel (estilo nomeado, forma do
+//                      nó w:tbl, ou o default Paragrafo de parágrafo sem
+//                      estilo). É um dos dois valores que autorizam mutação.
+//   OrigemHeuristica — palpite automático de QUALQUER camada, inclusive da
+//                      camada 1. O recuo à esquerda é o único caso aqui.
+//
+// A1 e A2 vivem no mesmo table-driven de propósito: o mutante que interessa
+// é "gravar a mesma origem em todos os caminhos", e ele só morre se os dois
+// lados estiverem no mesmo conjunto de casos. Inverter A1 sozinho seria morto
+// por A2 e vice-versa.
+// ---------------------------------------------------------------------------
+
+func TestClassificarPorEstiloDocxDecideOrigemJuntoDoPapel(t *testing.T) {
+	t.Parallel()
+
+	const recuoQuatroCentimetros = 2268 // 4 cm: 2268 / 566,93 twips por cm
+
+	require.Greater(t, recuoQuatroCentimetros, limiarRecuoCitacaoTwips,
+		"pré-condição de A1: o recuo do caso precisa alcançar a guarda do sinal geométrico")
+
+	casos := []struct {
+		nome      string
+		tipo      TipoBlocoBruto
+		estilo    string
+		recuo     int
+		papel     cdm.Papel
+		confianca float64
+		origem    cdm.Origem
+	}{
+		{
+			nome:      "A1: parágrafo sem estilo, recuado 4 cm — citação só por GEOMETRIA",
+			tipo:      TipoBlocoBrutoParagrafo,
+			recuo:     recuoQuatroCentimetros,
+			papel:     cdm.Citacao,
+			confianca: confiancaRecuoCitacaoEsperada,
+			origem:    cdm.OrigemHeuristica,
+		},
+		{
+			nome:      "A2: estilo nomeado de citação — o documento DECLARA",
+			tipo:      TipoBlocoBrutoParagrafo,
+			estilo:    "Citao",
+			papel:     cdm.Citacao,
+			confianca: confiancaEstiloConhecido,
+			origem:    cdm.OrigemEstiloDocx,
+		},
+		{
+			nome:      "A2: estilo Normal — o documento DECLARA parágrafo de corpo",
+			tipo:      TipoBlocoBrutoParagrafo,
+			estilo:    "Normal",
+			papel:     cdm.Paragrafo,
+			confianca: confiancaEstiloConhecido,
+			origem:    cdm.OrigemEstiloDocx,
+		},
+		{
+			nome:      "A2: Heading1 — o documento DECLARA a hierarquia",
+			tipo:      TipoBlocoBrutoParagrafo,
+			estilo:    "Heading1",
+			papel:     cdm.Secao(1),
+			confianca: confiancaEstiloConhecido,
+			origem:    cdm.OrigemEstiloDocx,
+		},
+		{
+			nome:      "A2: w:tbl — a FORMA do nó é declaração, não palpite",
+			tipo:      TipoBlocoBrutoTabela,
+			papel:     cdm.Tabela,
+			confianca: confiancaEstiloConhecido,
+			origem:    cdm.OrigemEstiloDocx,
+		},
+		{
+			nome:      "A2: parágrafo sem estilo e sem recuo — default declarado, confiança baixa",
+			tipo:      TipoBlocoBrutoParagrafo,
+			papel:     cdm.Paragrafo,
+			confianca: confiancaSemEstilo,
+			origem:    cdm.OrigemEstiloDocx,
+		},
+	}
+
+	for _, caso := range casos {
+		caso := caso
+		t.Run(caso.nome, func(t *testing.T) {
+			t.Parallel()
+
+			bloco := ClassificarPorEstiloDocx(BlocoBruto{
+				Tipo:               caso.tipo,
+				EstiloNomeado:      caso.estilo,
+				Texto:              "Trecho qualquer do documento.",
+				RecuoEsquerdaTwips: caso.recuo,
+				Indice:             7,
+			})
+
+			assert.Equal(t, caso.papel, bloco.Papel)
+			assert.Equal(t, caso.confianca, bloco.Confianca)
+			assert.Equal(t, caso.origem, bloco.Origem,
+				"C1: a origem é decidida JUNTO do papel; gravar um valor fixo em todos os caminhos derruba este caso")
+		})
+	}
 }
