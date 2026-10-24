@@ -126,8 +126,15 @@ inicial do catálogo da ABNT, não para o registro individual.
 
 ## Estado do Git
 
-Branch `f3-motor-e-gate-de-ruleset`. Último push em `a2e027a`; o commit deste
-recorte é **local**. Não há PR aberto.
+**`main` está atualizada e empurrada** (`2144275`, merge de
+`f3-motor-e-gate-de-ruleset`), e a branch segue em `f45f470`, também empurrada.
+Nada pendente de push, árvore limpa, nenhum PR aberto.
+
+Atenção para quem retomar em outra IDE: a `main` recebeu, por outro caminho, os
+dois commits anteriores deste trabalho com **hashes diferentes** (`b1130ce` e
+`20a0eb8`, mais o merge do PR #1 em `6555a70`) — conteúdo equivalente aos locais
+`a2e027a` e `6ad0e79`. O merge saiu limpo porque a única diferença real era o
+recorte dos mutadores; se aparecer divergência de histórico, é essa.
 
 ## Agentes e quota
 
