@@ -1,8 +1,13 @@
 # Retomada
 
-Atualizado em 17/10/2026. Recorte `f3-mutadores-por-papel` **CONCLUÍDO**.
+Atualizado em 24/10/2026 (sessão de ambiente; o recorte é de 17/10).
+Recorte `f3-mutadores-por-papel` **CONCLUÍDO**.
 A máquina das exceções de espaçamento simples da §5.2 existe; **nenhum perfil a
 declara**, então a saída de produção não mudou. Próximo passo é o `v2.yaml`.
+
+Em 24/10 nada de produção foi alterado: a sessão só destravou os portões da
+regra 10 na máquina Windows e remediu a suíte. Ver **Ambiente da máquina
+Windows** abaixo.
 
 ## O que ficou pronto
 
@@ -124,7 +129,64 @@ inferido entrou em spec ou perfil.** Numeração de página (§5.3) exige mutar
 cabeçalho, que o motor não toca. O `fonte` do `v1.yaml` aponta para a página
 inicial do catálogo da ABNT, não para o registro individual.
 
+## Ambiente da máquina Windows — medido em 24/10/2026
+
+Os três portões da regra 10 **não rodavam** nesta máquina, por motivos de
+ambiente e não de código. Dois foram corrigidos; um fica como débito.
+
+| Portão | Antes de 24/10 | Agora |
+|---|---|---|
+| `gofmt -l .` | listava **todos** os 186 `.go` | **limpo**, sem saída |
+| `go build` / `go vet` | `go: go.mod requires go >= 1.26.0 (running go 1.24.2)` | `go vet` exit 0 |
+| `go test -race` | `-race requires cgo` | **indisponível** (sem compilador C) |
+
+**O que foi corrigido, e como.**
+
+1. **`.gitattributes` com `* text=auto eol=lf`** (commit `a814a53`). A causa era
+   `core.autocrlf=true` **sem** `.gitattributes`: o checkout vinha em CRLF e
+   `gofmt` recusa CRLF, então o portão listava o repositório inteiro. O índice
+   do git já guardava LF, então `git add --renormalize .` não mexeu em nenhum
+   arquivo — só o working tree estava em CRLF, e foi refeito com
+   `git rm --cached -r . && git reset --hard`. `*.docx` marcado `binary`, pelas
+   duas fixtures de `backend/testdata`.
+2. **`go env -w GOTOOLCHAIN=auto`** (configuração da máquina, fora do repo). O
+   valor era `local`, o que impedia o Go de buscar a 1.26.0 que o `go.mod`
+   exige tendo só a 1.24.2 instalada.
+
+**Medição de 24/10, dir `backend`,** com `cmd/rulesetctl` excluído da lista de
+pacotes (ver débito abaixo):
+
+| Comando | Resultado |
+|---|---|
+| `gofmt -l .` | exit 0, **sem saída** |
+| `go vet $(go list ./... \| grep -v cmd/rulesetctl)` | exit 0 |
+| `go test $(go list ./... \| grep -v cmd/rulesetctl) -count=1 -shuffle=on` | **33 pacotes `ok`, zero `FAIL`**, exit 0 |
+
+**Limites desta medição, que não são os da evidência de 17/10:** rodou **sem
+`-race`**, sem `-tags=integration`, sem `golangci-lint`, sem
+`rulesetctl validar` e sem os testes de `cmd/rulesetctl`. Não substitui as
+medições de 17/10 — que foram feitas em ambiente com Go 1.26 e cgo — e não é
+evidência nova sobre corrida de dados.
+
+**Débito novo de ambiente: `cmd/rulesetctl` não compila no Windows.**
+`cmd/rulesetctl/main.go:172` usa `syscall.O_DIRECTORY|syscall.O_NONBLOCK` em
+`diretoriosConfinados.Open`, e nenhuma das duas constantes existe em
+`syscall` no Windows. Consequência: `go build ./...` e `go vet ./...` **sem
+filtro** falham aqui, e `rulesetctl validar/semear` não roda local. É o caminho
+de travessia confinada por `os.Root` já auditado por segurança, então separá-lo
+por build tag (hardening no Unix, `O_RDONLY` simples no Windows) foi
+**deliberadamente adiado** para recorte próprio — decisão do usuário em 24/10 —
+em vez de correção incidental. O build de produção é container Linux e não é
+afetado.
+
+**`go test -race` é inalcançável nesta máquina:** `-race` exige cgo e não há
+`gcc` nem `clang` no PATH. Quem precisar de `-race` roda em container ou
+instala um compilador C.
+
 ## Estado do Git
+
+Em 24/10: `git pull --ff-only` trouxe três commits (`b1130ce..ff05777`), árvore
+limpa, e **`a814a53` (o `.gitattributes`) está LOCAL, ainda não empurrado**.
 
 **`main` está atualizada e empurrada** (`2144275`, merge de
 `f3-motor-e-gate-de-ruleset`), e a branch segue em `f45f470`, também empurrada.
