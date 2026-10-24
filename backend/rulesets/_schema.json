@@ -103,7 +103,7 @@
         "entrelinha": {
           "type": "number",
           "exclusiveMinimum": 0,
-          "description": "Multiplicador de linha, convertido em unidades de 240."
+          "description": "Multiplicador de linha, convertido em unidades de 240. GATE GROSSEIRO: o exclusiveMinimum 0 confere FORMA (numero, maior que zero), nao a medida. Os limites EFETIVOS sao os de ruleset.ValidarEntrelinha, que tambem recusa o multiplo que arredonda para zero unidade de 240 e o que nao cabe no inteiro do OOXML, e nenhum schema JSON expressa isso. Nao duplicar essa regra aqui e deliberado: um perfil que passe neste schema ainda pode ser recusado pelo validador, e e ele quem decide."
         },
         "recuo_cm": {
           "type": "number",
@@ -125,6 +125,29 @@
             "centralizado",
             "justificado"
           ]
+        }
+      }
+    },
+    "entrelinha_por_papel": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Entrelinha propria dos quatro papeis de excecao da ABNT NBR 14724:2024 §5.2, como multiplicador de linha. Chave ausente significa que a norma e silente no papel e o documento e preservado. A lista de papeis e fechada: paragrafo duplicaria o grupo do corpo e tabela levaria ordinal de w:tbl ao plano. GATE GROSSEIRO: o exclusiveMinimum 0 das quatro propriedades confere FORMA (numero, maior que zero), nao a medida. Os limites EFETIVOS sao os de ruleset.ValidarEntrelinha, que tambem recusa o multiplo que arredonda para zero unidade de 240 e o que nao cabe no inteiro do OOXML, e nenhum schema JSON expressa isso. Nao duplicar essa regra aqui e deliberado: um perfil que passe neste schema ainda pode ser recusado pelo validador, e e ele quem decide.",
+      "properties": {
+        "citacao": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "referencia": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "legenda": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "nota_rodape": {
+          "type": "number",
+          "exclusiveMinimum": 0
         }
       }
     }

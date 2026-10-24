@@ -199,6 +199,13 @@ func candidatosConsultados(t *testing.T, politica PoliticaConfianca, blocos []Bl
 // A6 — a confiança de C3 mantém o bloco candidato ao desempate; a de C2
 // (estilo nomeado, evidência declarada pelo documento) não precisa de
 // desempate e fica fora.
+//
+// RECORTE f3-mutadores-por-papel, A13: a construção do bloco de recuo passa a
+// ser OrigemHeuristica, que é o que C1 emite. A afirmação sobre o FILTRO não
+// muda — fallback.go:87 exclui só OrigemUsuario e OrigemLLM —, e é justamente
+// isso que o critério A13 reivindica: renomear a origem do recuo não pode
+// tirá-lo do desempate do LLM. Mata o mutante que acrescenta OrigemHeuristica
+// às exclusões de candidato, reflexo plausível de quem implementa C1.
 func TestFallbackCitacaoPorRecuoEhCandidataECitacaoPorEstiloNao(t *testing.T) {
 	const (
 		refRecuo  = 1
@@ -206,15 +213,21 @@ func TestFallbackCitacaoPorRecuoEhCandidataECitacaoPorEstiloNao(t *testing.T) {
 	)
 
 	blocos := []Bloco{
-		{Papel: Citacao, TextoResumo: "citação detectada pelo recuo", Confianca: 0.5, Origem: OrigemEstiloDocx, RefXML: refRecuo},
+		{Papel: Citacao, TextoResumo: "citação detectada pelo recuo", Confianca: 0.5, Origem: OrigemHeuristica, RefXML: refRecuo},
 		{Papel: Citacao, TextoResumo: "citação declarada pelo estilo", Confianca: 0.95, Origem: OrigemEstiloDocx, RefXML: refEstilo},
 	}
 
-	consultados := candidatosConsultados(t, politicaDefaultDeProducao(), blocos)
+	politica := politicaDefaultDeProducao()
+	require.Less(t, blocos[0].Confianca, politica.LimiteConsulta,
+		"pré-condição: a confiança do recuo precisa ficar ABAIXO de LimiteConsulta, senão o caso não alcança o filtro de candidatos")
+
+	consultados := candidatosConsultados(t, politica, blocos)
 
 	require.Len(t, consultados, 1,
 		"com LimiteConsulta 0,7, a citação de recuo (0,5) entra no desempate e a de estilo (0,95) não")
 	require.Equal(t, refRecuo, consultados[0].RefXML)
+	require.Equal(t, OrigemHeuristica, consultados[0].Origem)
+	require.Equal(t, 0.5, consultados[0].Confianca)
 }
 
 // A16 — o delta de candidatos, medido e NOMEADO. É o efeito colateral que o
@@ -241,8 +254,12 @@ func TestFallbackRecuoAumentaOConjuntoDeCandidatos(t *testing.T) {
 
 	// O MESMO documento com dois desses parágrafos recuados acima do limiar.
 	comRecuo := append([]Bloco(nil), semRecuo...)
-	comRecuo[1] = Bloco{Papel: Citacao, TextoResumo: "parágrafo dois, recuado", Confianca: 0.5, Origem: OrigemEstiloDocx, RefXML: 1}
-	comRecuo[3] = Bloco{Papel: Citacao, TextoResumo: "parágrafo quatro, recuado", Confianca: 0.5, Origem: OrigemEstiloDocx, RefXML: 3}
+	// Origem do recuo é OrigemHeuristica desde C1 (f3-mutadores-por-papel):
+	// palpite geométrico, não declaração do documento. O delta medido abaixo
+	// não depende disso — o filtro não exclui OrigemHeuristica —, mas o estado
+	// construído aqui precisa ser um que a camada 1 realmente produza.
+	comRecuo[1] = Bloco{Papel: Citacao, TextoResumo: "parágrafo dois, recuado", Confianca: 0.5, Origem: OrigemHeuristica, RefXML: 1}
+	comRecuo[3] = Bloco{Papel: Citacao, TextoResumo: "parágrafo quatro, recuado", Confianca: 0.5, Origem: OrigemHeuristica, RefXML: 3}
 
 	politica := politicaDefaultDeProducao()
 

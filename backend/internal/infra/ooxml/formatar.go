@@ -8,8 +8,15 @@ import (
 )
 
 // AplicarPlano executa um formatador.Plano sobre o pacote: a página nas seções
-// correntes e, nos ordinais de plano.ReferenciasCorpo, as propriedades de
-// corpo que o perfil DECLARA. ReferenciasCorpo vazio aplica somente a página.
+// correntes; nos ordinais de plano.ReferenciasCorpo, as propriedades de corpo
+// que o perfil DECLARA; e, por fim, a entrelinha de cada grupo de
+// plano.EntrelinhaPorPapel nos ordinais dele. ReferenciasCorpo vazio aplica
+// somente a página, e lista de grupos vazia ou nil mantém o comportamento
+// anterior a este campo byte a byte.
+//
+// Custo conhecido: cada grupo reparseia word/document.xml, então os passes vão
+// de 6 para 6+k, com k vindo do ruleset versionado no git, não do usuário.
+// Sem teto neste recorte.
 //
 // ATÔMICA: os mutadores rodam sobre uma cópia rasa do documento, com
 // partesSubstituidas clonado, e o mapa só é trocado no receptor depois que
@@ -57,6 +64,17 @@ func (documento *Documento) AplicarPlano(plano formatador.Plano, ausentes Margen
 		etapas = append(etapas, func() error { return copia.AplicarEspacamentoDepois(referencias, *corpo.EspacoDepoisPT) })
 	}
 	etapas = append(etapas, func() error { return copia.AplicarTipografia(referencias, corpo.Fonte, corpo.TamanhoPT) })
+	// Os grupos por papel entram DEPOIS das etapas de corpo. A posição é
+	// indiferente ao resultado, porque Planejar garante que os conjuntos são
+	// disjuntos entre si e de ReferenciasCorpo; ela é fixada só para a saída
+	// ser determinística. Cada grupo recebe SOMENTE entrelinha neste recorte.
+	// AplicarEntrelinha já valida a medida e recusa ordinal negativo,
+	// repetido, fora do documento e alvo w:tbl — o plano não revalida —, e
+	// escreve pela cópia transacional via SubstituirParte, então um grupo que
+	// recusa também não deixa delta.
+	for _, grupo := range plano.EntrelinhaPorPapel {
+		etapas = append(etapas, func() error { return copia.AplicarEntrelinha(grupo.Referencias, grupo.Entrelinha) })
+	}
 	for _, etapa := range etapas {
 		if err := etapa(); err != nil {
 			return err

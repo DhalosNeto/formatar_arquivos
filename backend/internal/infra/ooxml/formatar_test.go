@@ -885,3 +885,295 @@ func TestAplicarPlanoDistingueZeroExplicitoDeCampoSilente(t *testing.T) {
 		conferirSomenteEntrelinhaMudouNoPPr(t, antes, propriedadesPorOrdinal(t, documentoNovo, referencias))
 	})
 }
+
+// ---------------------------------------------------------------------------
+// RECORTE f3-mutadores-por-papel — C4, critérios A11, A12 e A18
+//
+// As etapas de grupo são ACRESCENTADAS AO FIM da lista de etapas de corpo.
+// A posição é indiferente ao resultado, porque os conjuntos são disjuntos por
+// C3; a redação fixa a posição só para o teste ser determinístico.
+//
+// Grupo recebe SOMENTE entrelinha neste recorte: fonte, tamanho, alinhamento,
+// recuo e espaçamento continuam restritos a plano.ReferenciasCorpo, porque não
+// há fonte normativa lida para tipografia de citação.
+// ---------------------------------------------------------------------------
+
+// corpoDeCitacaoQuote é o w:p de ordinal 2 das fixtures de grupo: estilo
+// nomeado "Quote", que ClassificarPorEstiloDocx traduz em Citacao/0,95/
+// OrigemEstiloDocx — origem AUTORIZADA pelo piso de C3. Sem o estilo, o bloco
+// cairia em Paragrafo e entraria em ReferenciasCorpo, e o grupo nasceria vazio.
+const corpoDeCitacaoQuote = `<w:p><w:pPr><w:pStyle w:val="Quote"/></w:pPr><w:r><w:t>dois</w:t></w:r></w:p>`
+
+// fixtureDoisParagrafosECitacao: w:p 0 e 1 de corpo, w:p 2 de citação.
+func fixtureDoisParagrafosECitacao() []byte {
+	return alinhamentoFixture(
+		`<w:p><w:r><w:t>zero</w:t></w:r></w:p><w:p><w:r><w:t>um</w:t></w:r></w:p>` +
+			corpoDeCitacaoQuote + sectPrDiferenteDoPlano)
+}
+
+// fixtureComCitacaoETabela acrescenta um w:tbl no ordinal 3. É o alvo que
+// AplicarEntrelinha recusa, e o que A12 e A18 usam para errar de propósito.
+func fixtureComCitacaoETabela() []byte {
+	return alinhamentoFixture(
+		`<w:p><w:r><w:t>zero</w:t></w:r></w:p><w:p><w:r><w:t>um</w:t></w:r></w:p>` +
+			corpoDeCitacaoQuote +
+			`<w:tbl><w:tr><w:tc><w:p><w:r><w:t>celula</w:t></w:r></w:p></w:tc></w:tr></w:tbl>` +
+			sectPrDiferenteDoPlano)
+}
+
+// definicaoComGrupoDeCitacao é o perfil silente (só tamanho e entrelinha, como
+// a 14724) acrescido da medida por papel da §5.2: citação em espaçamento
+// simples dentro de um corpo em 1,5.
+func definicaoComGrupoDeCitacao(entrelinhaDaCitacao float64) ruleset.Definicao {
+	definicao := ruleset.Definicao{
+		Slug:               "revista-sintetica",
+		Versao:             1,
+		Nome:               "Revista Sintética de Teste",
+		Fonte:              "https://exemplo.test/diretrizes",
+		Pagina:             paginaSintetica(),
+		Corpo:              corpoSilente(),
+		EntrelinhaPorPapel: map[string]float64{"citacao": entrelinhaDaCitacao},
+	}
+	return definicao
+}
+
+// indiceDoPacote percorre o caminho real: ExtrairBlocos + camada 1.
+func indiceDoPacote(t *testing.T, doc *Documento) cdm.Indice {
+	t.Helper()
+
+	brutos, err := doc.ExtrairBlocos()
+	require.NoError(t, err)
+	blocos := make([]cdm.Bloco, 0, len(brutos))
+	for _, bruto := range brutos {
+		blocos = append(blocos, ClassificarPorEstiloDocx(bruto))
+	}
+	indice := cdm.NovoIndice(blocos)
+	require.NoError(t, indice.Validar(), "pré-condição: o índice vindo do pacote precisa ser válido")
+	return indice
+}
+
+// ---------------------------------------------------------------------------
+// A11 — o grupo aplica a medida do papel, e só ela
+// ---------------------------------------------------------------------------
+
+func TestAplicarPlanoAplicaEntrelinhaDoGrupoNosOrdinaisDoPapel(t *testing.T) {
+	pacote := docxSintetico(t, fixtureDoisParagrafosECitacao())
+	definicao := definicaoComGrupoDeCitacao(1.0)
+	require.NoError(t, definicao.Validar(), "pré-condição: o perfil do caso precisa ser válido")
+	require.Equal(t, 1.5, definicao.Corpo.Entrelinha,
+		"pré-condição: o corpo em 1,5 e o grupo em 1,0 precisam DIFERIR, senão o caso não distingue os dois mutadores")
+
+	doc := abrirParaSubstituicao(t, pacote)
+	indice := indiceDoPacote(t, doc)
+	require.Equal(t, cdm.Citacao, indice.Blocos[2].Papel, "pré-condição: o ordinal 2 chega como Citacao")
+	require.Equal(t, cdm.OrigemEstiloDocx, indice.Blocos[2].Origem,
+		"pré-condição: a origem do ordinal 2 precisa AUTORIZAR a mutação (piso de C3)")
+
+	plano, err := formatador.Planejar(indice, definicao)
+	require.NoError(t, err)
+	require.Equal(t, []int{0, 1}, plano.ReferenciasCorpo, "pré-condição: Planejar separou corpo e citação")
+	require.Equal(t, []formatador.GrupoEntrelinha{{Papel: cdm.Citacao, Entrelinha: 1.0, Referencias: []int{2}}},
+		plano.EntrelinhaPorPapel, "pré-condição: o grupo do caso vem da porta real, não de literal")
+
+	require.NoError(t, doc.AplicarPlano(plano, MargensComplementares{}))
+	saida := salvarSubstituicao(t, doc)
+	documentoXML := lerParte(t, saida, "word/document.xml")
+
+	for _, ordinal := range []int{0, 1} {
+		assert.Equal(t, map[string]string{"line": "360", "lineRule": "auto"},
+			unicaPropriedade(t, propriedadesDoParagrafo(t, documentoXML, ordinal), "spacing"),
+			"A11: o ordinal %d é corpo e recebe a entrelinha do corpo (1,5 -> 240*1,5)", ordinal)
+	}
+
+	propriedadesDaCitacao := propriedadesDoParagrafo(t, documentoXML, 2)
+	assert.Equal(t, map[string]string{"line": "240", "lineRule": "auto"},
+		unicaPropriedade(t, propriedadesDaCitacao, "spacing"),
+		"A11: o ordinal 2 recebe a medida do GRUPO, não a do corpo")
+	assert.Equal(t, []string{"pStyle", "spacing"}, locaisDoPPr(propriedadesDaCitacao),
+		"A11/C4: grupo recebe SOMENTE entrelinha; alinhamento, recuo e espaçamento seguem restritos a ReferenciasCorpo")
+
+	assert.Equal(t, extrairTextosWT(t, lerParte(t, pacote, "word/document.xml")), extrairTextosWT(t, documentoXML),
+		"A11: a sequência de runas de todos os w:t é idêntica à da entrada")
+
+	assert.Equal(t, listarPartes(t, pacote), listarPartes(t, saida), "A11: nenhuma parte entra nem sai do pacote")
+	for _, parte := range listarPartes(t, pacote) {
+		if parte == "word/document.xml" {
+			continue
+		}
+		assert.Equal(t, lerParte(t, pacote, parte), lerParte(t, saida, parte),
+			"A11: a parte %s fica byte a byte igual", parte)
+	}
+
+	for repeticao := 0; repeticao < 10; repeticao++ {
+		require.NoError(t, doc.AplicarPlano(plano, MargensComplementares{}), "A11: repetição %d", repeticao)
+		require.Equal(t, saida, salvarSubstituicao(t, doc), "A11: AplicarPlano é idempotente byte a byte na repetição %d", repeticao)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// A12 — grupo apontando w:tbl: a falha é atômica, nem o delta de página fica
+// ---------------------------------------------------------------------------
+
+func TestAplicarPlanoComGrupoSobreTabelaFalhaDeFormaAtomica(t *testing.T) {
+	pacote := docxSintetico(t, fixtureComCitacaoETabela())
+
+	require.Equal(t, pacote, salvarSubstituicao(t, abrirParaSubstituicao(t, pacote)),
+		"pré-condição: sem delta algum, Salvar reproduz o pacote byte a byte")
+
+	// Sem esta pré-condição o critério seria vacuoso: é ela que prova que
+	// existia delta de página para ser descartado.
+	isolado := abrirParaSubstituicao(t, pacote)
+	require.NoError(t, isolado.AplicarPagina(paginaSintetica(), MargensComplementares{}))
+	require.NotEqual(t, pacote, salvarSubstituicao(t, isolado),
+		"pré-condição: a página do plano produz delta nesta fixture")
+
+	// O tipo Plano ainda permite este estado; C5 é que o torna inalcançável
+	// pelo HTTP.
+	plano := formatador.Plano{
+		Pagina:           paginaSintetica(),
+		Corpo:            corpoSilente(),
+		ReferenciasCorpo: []int{0, 1},
+		EntrelinhaPorPapel: []formatador.GrupoEntrelinha{
+			{Papel: cdm.Citacao, Entrelinha: 1.0, Referencias: []int{3}},
+		},
+	}
+
+	doc := abrirParaSubstituicao(t, pacote)
+	require.Error(t, doc.AplicarPlano(plano, MargensComplementares{}),
+		"A12: o ordinal 3 é w:tbl e precisa alcançar a recusa de AplicarEntrelinha")
+	assert.Equal(t, pacote, salvarSubstituicao(t, doc),
+		"A12: falha de grupo não deixa nem o delta de página; falsifica aplicar grupos fora da cópia transacional")
+}
+
+// ---------------------------------------------------------------------------
+// A18 — atomicidade ENTRE chamadas, com grupo válido ANTES do que falha
+//
+// O que está sendo caçado: `copia := *documento` é cópia RASA de
+// Documento{arquivos []*zip.File, partesSubstituidas map[string][]byte}
+// (pacote.go:25-28), e a atomicidade só foi verificada no nível do MAPA.
+// `arquivos` é somente leitura (pacote.go:99, partes.go:63, recuo.go:232;
+// gravarParte copia FileHeader por valor e realoca Extra), então o vazamento
+// possível é mutar IN-PLACE um []byte que maps.Clone compartilha entre a cópia
+// e o receptor.
+//
+// A ORDEM é o ponto: com um único grupo, e sendo ele justamente o que falha,
+// uma etapa que valide antes de escrever nunca chega a vazar e o critério
+// passaria vazio. O grupo VÁLIDO precisa escrever primeiro.
+// ---------------------------------------------------------------------------
+
+func TestAplicarPlanoNaoVazaEscritaDeGrupoParaOReceptorEmFalhaPosterior(t *testing.T) {
+	pacote := docxSintetico(t, fixtureComCitacaoETabela())
+
+	grupoDaCitacao := func(entrelinha float64) formatador.GrupoEntrelinha {
+		return formatador.GrupoEntrelinha{Papel: cdm.Citacao, Entrelinha: entrelinha, Referencias: []int{2}}
+	}
+	planoBase := func(grupos ...formatador.GrupoEntrelinha) formatador.Plano {
+		return formatador.Plano{
+			Pagina:             paginaSintetica(),
+			Corpo:              corpoSilente(),
+			ReferenciasCorpo:   []int{0, 1},
+			EntrelinhaPorPapel: grupos,
+		}
+	}
+
+	doc := abrirParaSubstituicao(t, pacote)
+	require.NoError(t, doc.AplicarPlano(planoBase(grupoDaCitacao(1.0)), MargensComplementares{}))
+	bytesDepoisDoPrimeiro := salvarSubstituicao(t, doc)
+	require.Equal(t, map[string]string{"line": "240", "lineRule": "auto"},
+		unicaPropriedade(t, propriedadesDoParagrafo(t, lerParte(t, bytesDepoisDoPrimeiro, "word/document.xml"), 2), "spacing"),
+		"pré-condição: o primeiro AplicarPlano gravou line=240 no ordinal 2")
+
+	// Pré-condição que mantém A18 falsificável: o grupo que vem ANTES do que
+	// falha realmente ESCREVE quando roda sozinho. Sem isso o segundo plano
+	// poderia falhar sem que nada tivesse sido escrito antes, e o critério
+	// voltaria a passar vazio.
+	soComOValido := abrirParaSubstituicao(t, pacote)
+	require.NoError(t, soComOValido.AplicarPlano(planoBase(grupoDaCitacao(2.0)), MargensComplementares{}))
+	require.Equal(t, map[string]string{"line": "480", "lineRule": "auto"},
+		unicaPropriedade(t, propriedadesDoParagrafo(t, lerParte(t, salvarSubstituicao(t, soComOValido), "word/document.xml"), 2), "spacing"),
+		"pré-condição: isolado, o grupo em 2,0 escreve line=480 no ordinal 2")
+
+	// Dois grupos, nesta ordem: o válido primeiro, o que erra depois.
+	segundoPlano := planoBase(
+		grupoDaCitacao(2.0),
+		formatador.GrupoEntrelinha{Papel: cdm.Legenda, Entrelinha: 1.0, Referencias: []int{3}},
+	)
+	require.Error(t, doc.AplicarPlano(segundoPlano, MargensComplementares{}),
+		"A18: o segundo grupo aponta o w:tbl do ordinal 3 e precisa alcançar a recusa")
+
+	saida := salvarSubstituicao(t, doc)
+	assert.Equal(t, map[string]string{"line": "240", "lineRule": "auto"},
+		unicaPropriedade(t, propriedadesDoParagrafo(t, lerParte(t, saida, "word/document.xml"), 2), "spacing"),
+		"A18: o ordinal 2 continua em line=240, não 480: a escrita do grupo válido não vazou para o receptor")
+	assert.Equal(t, bytesDepoisDoPrimeiro, saida,
+		"A18: Salvar reproduz exatamente os bytes guardados depois do primeiro AplicarPlano")
+}
+
+// ---------------------------------------------------------------------------
+// SOBREPOSIÇÃO ENTRE CONJUNTOS DO PLANO — comportamento fixado, não garantido
+//
+// Achado do validador: a disjunção é TEOREMA de Planejar (C3) e AplicarPlano
+// NÃO revalida, por desenho documentado (C4). Mas o TIPO formatador.Plano
+// admite sobreposição, e nela o último AplicarEntrelinha sobrescreve o
+// anterior em SILÊNCIO — sem erro, sem log, sem critério fixando qual medida
+// sobra. Este teste fixa o observável para que uma mudança futura em
+// AplicarPlano (reordenar as etapas, deduplicar, ou passar a recusar) não
+// altere isso sem alguém quebrar um teste.
+//
+// NASCE VERDE: é pino de regressão, não RED. Mutantes que ele mata:
+//   - mover as etapas de grupo para ANTES das etapas de corpo (o corpo
+//     passaria a vencer o grupo no ordinal sobreposto);
+//   - iterar plano.EntrelinhaPorPapel em ordem não determinística (mapa em
+//     vez de slice), que tornaria o resultado do segundo caso instável;
+//   - deduplicar ou recusar sobreposição dentro de AplicarPlano sem ninguém
+//     declarar a mudança de contrato.
+// ---------------------------------------------------------------------------
+
+func TestAplicarPlanoComConjuntosSobrepostosUltimaEtapaVence(t *testing.T) {
+	pacote := docxSintetico(t, fixtureDoisParagrafosECitacao())
+
+	entrelinhaDoOrdinal := func(t *testing.T, plano formatador.Plano, ordinal int) map[string]string {
+		t.Helper()
+		doc := abrirParaSubstituicao(t, pacote)
+		require.NoError(t, doc.AplicarPlano(plano, MargensComplementares{}),
+			"sobreposição não é recusada hoje: AplicarPlano não revalida o plano (C4)")
+		documentoXML := lerParte(t, salvarSubstituicao(t, doc), "word/document.xml")
+		return unicaPropriedade(t, propriedadesDoParagrafo(t, documentoXML, ordinal), "spacing")
+	}
+
+	t.Run("grupo vence o corpo no ordinal sobreposto, porque as etapas de grupo vão ao FIM", func(t *testing.T) {
+		// O ordinal 1 está nos DOIS conjuntos: corpo (1,5 -> 360) e grupo
+		// (1,0 -> 240). Planejar nunca emite isto; o tipo admite.
+		plano := formatador.Plano{
+			Pagina:           paginaSintetica(),
+			Corpo:            corpoSilente(),
+			ReferenciasCorpo: []int{0, 1},
+			EntrelinhaPorPapel: []formatador.GrupoEntrelinha{
+				{Papel: cdm.Citacao, Entrelinha: 1.0, Referencias: []int{1}},
+			},
+		}
+		require.Equal(t, 1.5, plano.Corpo.Entrelinha,
+			"pré-condição: as duas medidas precisam DIFERIR, senão o caso não distingue quem venceu")
+
+		assert.Equal(t, map[string]string{"line": "240", "lineRule": "auto"},
+			entrelinhaDoOrdinal(t, plano, 1), "o grupo é a última etapa e sobrescreve a medida do corpo")
+		assert.Equal(t, map[string]string{"line": "360", "lineRule": "auto"},
+			entrelinhaDoOrdinal(t, plano, 0), "o ordinal fora da sobreposição fica com a medida do corpo")
+	})
+
+	t.Run("entre dois grupos, vence o ÚLTIMO da slice", func(t *testing.T) {
+		plano := formatador.Plano{
+			Pagina:           paginaSintetica(),
+			Corpo:            corpoSilente(),
+			ReferenciasCorpo: []int{0, 1},
+			EntrelinhaPorPapel: []formatador.GrupoEntrelinha{
+				{Papel: cdm.Citacao, Entrelinha: 1.0, Referencias: []int{2}},
+				{Papel: cdm.Legenda, Entrelinha: 3.0, Referencias: []int{2}},
+			},
+		}
+
+		assert.Equal(t, map[string]string{"line": "720", "lineRule": "auto"},
+			entrelinhaDoOrdinal(t, plano, 2),
+			"a ordem da slice é o que decide: Plano carrega []GrupoEntrelinha e não map[papel][]int justamente para isso ser determinístico")
+	})
+}

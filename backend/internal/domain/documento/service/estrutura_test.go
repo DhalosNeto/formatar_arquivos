@@ -163,3 +163,135 @@ func TestCorrigirRemoveSomenteRevisaoDoAlvo(t *testing.T) {
 	require.Len(t, resultado.Revisoes, 1)
 	require.Equal(t, 9, resultado.Revisoes[0].RefXML)
 }
+
+// ---------------------------------------------------------------------------
+// RECORTE f3-mutadores-por-papel — C5, critérios A15, A16 e A17
+//
+// BUG VIVO no código empurrado: Corrigir chama Reclassificar sem restrição de
+// papel, então uma requisição do dono pode marcar o ordinal de um w:tbl como
+// "paragrafo"; o bloco entra em ReferenciasCorpo e o primeiro mutador recusa
+// o alvo que não é w:p, FALHANDO o job — e falha de worker trava
+// permanentemente o par (documento, perfil). Este recorte ampliaria a
+// exposição, levando o mesmo caminho aos quatro papéis de exceção da §5.2.
+//
+// Conserto: recusar transição PARA Tabela e transição DE Tabela, com
+// *ErroValidacao de campo "papel". A premissa só é verdadeira porque C6 veda
+// as fontes não estruturais de cdm.Tabela: com Tabela <=> w:tbl, correção
+// humana de ou para Tabela nunca é legítima.
+//
+// Onde cada termo mora é observável pelas LEITURAS do repositório: PARA Tabela
+// recusa junto de papel.Valido(), ANTES de qualquer I/O; DE Tabela exige o
+// bloco alvo e recusa DEPOIS de localizá-lo.
+// ---------------------------------------------------------------------------
+
+// indiceSerializadoDeTeste monta o CDM persistido a partir dos blocos.
+func indiceSerializadoDeTeste(t *testing.T, blocos []cdm.Bloco) json.RawMessage {
+	t.Helper()
+	bruto, err := cdm.NovoIndice(blocos).Serializar()
+	require.NoError(t, err)
+	return bruto
+}
+
+func exigirCampoPapelRecusado(t *testing.T, err error) {
+	t.Helper()
+	var alvo *errors.ErroValidacao
+	require.ErrorAs(t, err, &alvo, "C5: a recusa é 400, não conflito nem erro de aplicação")
+	require.NotEmpty(t, alvo.Campos)
+	require.Equal(t, "papel", alvo.Campos[0].Campo)
+}
+
+func TestCorrigirRecusaTransicaoParaTabela(t *testing.T) {
+	dono, err := vo.NovoDonoSessao(uuid.New())
+	require.NoError(t, err)
+	require.True(t, cdm.Tabela.Valido(),
+		"pré-condição de A15: cdm.Tabela é um papel VÁLIDO; se não fosse, o caso morreria na guarda antiga de papel.Valido() e não provaria o termo novo")
+
+	bruto := indiceSerializadoDeTeste(t, []cdm.Bloco{
+		{Papel: cdm.Paragrafo, TextoResumo: "parágrafo do autor", Confianca: .2, Origem: cdm.OrigemEstiloDocx, RefXML: 4},
+	})
+	id := uuid.New()
+	repo := &estruturaFake{documento: entity.Documento{ID: id, Dono: dono, Status: entity.StatusAnalisado, CDM: bruto}}
+	servico, err := service.NovoServicoEstrutura(repo)
+	require.NoError(t, err)
+
+	indice, err := servico.Corrigir(context.Background(), dono, id, 4, cdm.Tabela)
+
+	exigirCampoPapelRecusado(t, err)
+	require.Equal(t, cdm.Indice{}, indice, "A15: o índice não é devolvido nem gravado")
+	require.Zero(t, repo.escritas, "A15: o repositório não recebe nenhuma chamada de escrita")
+	require.Zero(t, repo.leituras,
+		"A15: o TERMO 1 fica junto de papel.Valido(), ANTES de qualquer I/O")
+}
+
+func TestCorrigirRecusaTransicaoDeTabela(t *testing.T) {
+	dono, err := vo.NovoDonoSessao(uuid.New())
+	require.NoError(t, err)
+
+	// Bloco Tabela produzido pela FORMA do nó w:tbl, que é a única fonte de
+	// cdm.Tabela depois de C6.
+	bruto := indiceSerializadoDeTeste(t, []cdm.Bloco{
+		{Papel: cdm.Tabela, TextoResumo: "conteúdo da tabela", Confianca: .95, Origem: cdm.OrigemEstiloDocx, RefXML: 4},
+	})
+	id := uuid.New()
+
+	for _, papel := range []cdm.Papel{cdm.Paragrafo, cdm.Citacao} {
+		t.Run("para "+papel.String(), func(t *testing.T) {
+			repo := &estruturaFake{documento: entity.Documento{ID: id, Dono: dono, Status: entity.StatusAnalisado, CDM: bruto}}
+			servico, err := service.NovoServicoEstrutura(repo)
+			require.NoError(t, err)
+
+			indice, err := servico.Corrigir(context.Background(), dono, id, 4, papel)
+
+			exigirCampoPapelRecusado(t, err)
+			require.Equal(t, cdm.Indice{}, indice)
+			require.Zero(t, repo.escritas,
+				"A16: é exatamente esta sequência que hoje brica o par (documento, perfil); falsifica guardar só a transição PARA Tabela")
+			require.Equal(t, 1, repo.leituras,
+				"A16: o TERMO 2 exige o bloco alvo, logo recusa DEPOIS de localizá-lo")
+		})
+	}
+}
+
+func TestCorrigirSegueAceitandoTransicaoLegitimaEntreNaoTabelas(t *testing.T) {
+	dono, err := vo.NovoDonoSessao(uuid.New())
+	require.NoError(t, err)
+
+	blocos := []cdm.Bloco{
+		{Papel: cdm.Paragrafo, TextoResumo: "parágrafo que é referência", Confianca: .2, Origem: cdm.OrigemEstiloDocx, RefXML: 4},
+		{Papel: cdm.Citacao, TextoResumo: "citação detectada pelo recuo", Confianca: .5, Origem: cdm.OrigemHeuristica, RefXML: 6},
+	}
+	bruto := indiceSerializadoDeTeste(t, blocos)
+	id := uuid.New()
+
+	casos := []struct {
+		nome     string
+		ref      int
+		posicao  int
+		papel    cdm.Papel
+		anterior cdm.Bloco
+	}{
+		{"parágrafo vira referência", 4, 0, cdm.Referencia, blocos[0]},
+		{"citação vira parágrafo", 6, 1, cdm.Paragrafo, blocos[1]},
+	}
+	for _, caso := range casos {
+		t.Run(caso.nome, func(t *testing.T) {
+			repo := &estruturaFake{documento: entity.Documento{ID: id, Dono: dono, Status: entity.StatusAnalisado, CDM: bruto}}
+			servico, err := service.NovoServicoEstrutura(repo)
+			require.NoError(t, err)
+
+			indice, err := servico.Corrigir(context.Background(), dono, id, caso.ref, caso.papel)
+			require.NoError(t, err, "A17: a guarda de C5 é ESTREITA e não recusa reclassificação legítima")
+
+			esperado := caso.anterior
+			esperado.Papel = caso.papel
+			esperado.Confianca = 1
+			esperado.Origem = cdm.OrigemUsuario
+			require.Equal(t, esperado, indice.Blocos[caso.posicao])
+			require.Equal(t, 1, repo.escritas, "A17: o índice corrigido é gravado")
+
+			salvo, err := cdm.Desserializar(repo.novo)
+			require.NoError(t, err)
+			require.Equal(t, indice, salvo)
+		})
+	}
+}

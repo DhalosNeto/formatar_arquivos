@@ -628,12 +628,17 @@ func TestAplicarHeuristicaRegiaoNaoRebaixaCitacaoDeEstiloNomeado(t *testing.T) {
 	assertResultadoBloco(t, 2, entrada[2], saida[2], blocoEsperado{papel: Referencia, reclassificado: true})
 }
 
+// RECORTE f3-mutadores-por-papel, C1: o bloco do recuo passa a ser construído
+// com OrigemHeuristica, que é o que ClassificarPorEstiloDocx emite. A guarda
+// de C5 é agnóstica à origem (exige só Papel != Paragrafo), então o resultado
+// não muda — mas é exatamente este caso que sustenta a invariante que C1
+// reivindica: "AplicarHeuristica não reescreve o bloco de recuo".
 func TestAplicarHeuristicaRegiaoNaoRebaixaCitacaoVindaDoSinalDeRecuo(t *testing.T) {
 	t.Parallel()
 
 	entrada := []Bloco{
 		deveNovoBloco(Secao(1), "REFERÊNCIAS", confiancaEntradaAlta, OrigemEstiloDocx, 0),
-		deveNovoBloco(Citacao, "Trecho citado em bloco, detectado pelo recuo à esquerda.", confiancaRecuoCitacaoRef, OrigemEstiloDocx, 1),
+		deveNovoBloco(Citacao, "Trecho citado em bloco, detectado pelo recuo à esquerda.", confiancaRecuoCitacaoRef, OrigemHeuristica, 1),
 		deveNovoBloco(Paragrafo, "MARCONI, Marina de Andrade; LAKATOS, Eva Maria. Fundamentos.", confiancaEntradaBaixa, OrigemEstiloDocx, 2),
 	}
 

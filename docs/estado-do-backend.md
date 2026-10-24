@@ -89,6 +89,154 @@ também PASS. O RED original foi por símbolos ausentes. A validação focal,
 os gates globais acima e a integração posterior pertencem a
 `f3-leitura-ruleset-por-id`; não são evidências do próximo gate de criação.
 
+## Medição de 17/10 — mutadores por papel (entregue)
+
+Recorte `f3-mutadores-por-papel`: habilitar as exceções de espaçamento simples
+da §5.2 da NBR 14724:2024. **6 contratos, 20 critérios, 22 arquivos.** Nenhuma
+linha implementada; o que segue é desenho auditado, não entrega.
+
+**Entregue e medido.** 6 contratos, 20 critérios, 22 arquivos.
+
+| Comando | Resultado (17/10/2026, dir `backend`) |
+|---|---|
+| `go build ./... && go vet ./... && go vet -tags=integration ./... && gofmt -l .` | exit 0, sem saída |
+| `golangci-lint run ./...` | `0 issues.` |
+| `go test ./... -race -count=1 -shuffle=on` | nenhuma linha `FAIL` |
+| `go run ./cmd/rulesetctl validar --dir rulesets` | `1 ruleset(s) validado(s)`, exit 0 |
+| focais V1/V2/V6 | verdes · formatador 93,8% · ruleset 98,8% · ooxml 52,151s · cdm 94,6% · documento/service 95,8% · infra/ruleset 82,8% |
+
+Cobertura é de **statements**, não de condições. Integração não executada: o
+recorte não toca `data/postgres`.
+
+**`V4` é verde e não cobre o que parece cobrir** — apontado pelo codador:
+`rulesetctl validar` roda contra `rulesets/`, e nenhum perfil declara a chave
+nova, porque `abnt-14724/v1.yaml` é imutável. Quem exercita o schema novo é A14,
+por YAML inline em `infra/ruleset.Carregar`, dentro de V6.
+
+**Ao fim deste recorte a saída de produção não muda.** A máquina existe, nenhum
+perfil declara `entrelinha_por_papel`. Era o sequenciamento pretendido: enquanto
+nada está semeado, a forma muda de graça.
+
+### A lição desta entrega: cobertura de condição não aparece na de statement
+
+Os dois pinos de invariante finais (lista branca de papéis e disjunção sob índice
+adversarial) deixaram a cobertura de V1 **idêntica** — 93,8% e 98,8%, os mesmos
+números de antes deles. Eles não acrescentam statement nenhum; acrescentam
+condição. É a regra 12 em forma mensurável, e a razão de a cobertura focal não
+servir de evidência para esse tipo de teste.
+
+O outro par: **A19 e A20 matam um mutante cada, e só um**. `grep "Papel: Tabela"`
+nos testes de domínio dá exatamente duas ocorrências, uma por critério. Já A19
+original **não** fixava onde o termo morava — passaria com a recusa posta em
+`Fallback.Aplicar` em vez de `validarJulgamentos`; o que fixa é afirmar
+`motivoRespostaClassificadorInvalida` **no candidato que teve julgamento válido**.
+
+### O que a implementação precisou corrigir, e que a spec não previa
+
+- **Três testes afirmavam um estado que C1 torna inalcançável.** Subcasos
+  chamados "pelo sinal de recuo" construídos com `OrigemEstiloDocx`, em
+  `serializacao_test.go`, `fallback_test.go` e `heuristica_test.go`. Seguiam
+  verdes (o round-trip e o filtro são agnósticos à origem) documentando um estado
+  que o produtor deixou de emitir. Corrigidos para `OrigemHeuristica`, e um deles
+  ficou **mais forte**: é o caso que sustenta a invariante de que
+  `AplicarHeuristica` não reescreve o bloco de recuo.
+- **Indeterminismo observável na API**, medido pelo testador: com
+  `{"paragrafo": 1.0, "citacao": 0}` o campo do 400 variava conforme a ordem de
+  iteração do mapa. Resolvido no desenho, não na documentação: validação em duas
+  passadas, lista branca inteira antes das medidas, chaves ordenadas.
+- **Schema mais frouxo que o código.** `exclusiveMinimum: 0` aceita o que
+  `ValidarEntrelinha` recusa. Não duplicamos os limites do Go em JSON Schema —
+  "arredonda para zero unidade de 240" depende da função de conversão, e qualquer
+  `minimum` redondo recusaria valor válido. O schema ficou como gate de forma,
+  com a divisão declarada na `description` **das duas** chaves de entrelinha: a
+  mesma folga existia em `corpo.entrelinha` desde antes do recorte.
+- **Um parágrafo meu em `contrato-api.md` documentava uma resposta HTTP que a
+  API não emite.** Descrevi 400 com campo `corpo` para erro de
+  `entrelinha_por_papel` e inventei "telas administrativas de perfil" para
+  justificá-lo. Não existe rota de escrita de perfil; o comportamento é real só
+  no `rulesetctl` e no seed. Removido.
+
+### A decisão de produto que abriu o recorte
+
+O usuário decidiu o **piso que autoriza mutar**: só bloco cuja classificação
+tenha origem declarada pelo documento (`OrigemEstiloDocx`) ou confirmada pelo
+humano (`OrigemUsuario`). Região (0,6), recuo (0,5) e regra textual (0,8) não
+autorizam.
+
+A assimetria que justifica o piso alto: aplicar espaçamento errado reformata o
+documento do autor com base num palpite; não aplicar deixa o documento como ele
+escreveu — o mesmo princípio dos campos silentes do ruleset. E confiança sozinha
+não serve de piso, porque `Paragrafo`@0,95 vindo de `Normal` é confiança de ter
+lido o **estilo** certo, não de o **papel** estar determinado.
+
+### Consequência de cobertura, declarada desde o objetivo
+
+Das quatro exceções da §5.2, o piso entrega **uma** automaticamente (`Citacao`
+por estilo nomeado). `Referencia` vem de região e `Legenda` de regra textual,
+ambas `OrigemHeuristica`: só mutam depois de confirmação humana pelo
+`PATCH /estrutura`. `NotaRodape` segue inalcançável. **A spec não promete "§5.2
+aplicada".**
+
+### O brick: bug vivo, descoberto pela pré-auditoria
+
+`domain/documento/service/estrutura.go:76` faz
+`Reclassificar(papel, 1, OrigemUsuario)` **sem restrição de papel**. Logo, no
+código já empurrado, marcar o ordinal de um `w:tbl` como `paragrafo` põe o bloco
+em `ReferenciasCorpo`, `alinhamento.go:78` recusa alvo que não é `w:p`, o job
+falha — e como `ChaveIdempotencia = SHA1(documentoID, rulesetID)` e a fila só
+reivindica `pendente`, o par (documento, perfil) **trava permanentemente**. Nem
+formata, nem reanalisa, nem corrige: só reupload.
+
+Não é risco de desenho do rascunho; é **exposição viva**. C5 fecha a porta para
+correções novas (recusa de/para `Tabela`), e índice já gravado errado continua
+irreparável — ver pendências.
+
+### A invariante `Tabela` ⟺ `w:tbl`
+
+C5 só é correto se `Tabela` vier apenas da forma do nó, e não vinha: o LLM podia
+atribuí-la. A segurança inventariou os escritores de `Papel` — `rg` sobre
+`Reclassificar(`/`NovoBloco(`, quatro mais um passthrough — e confirmou que,
+vedadas as fontes não estruturais, não sobra nenhuma:
+
+| Escritor | Produz `Tabela`? |
+|---|---|
+| `ooxml/blocos.go:311` | Sim, e **só** por `bruto.Tipo == TipoBlocoBrutoTabela` |
+| `papelDoEstiloNomeado` | Não — nenhum caso `Tabela`; nome de estilo nunca a produz |
+| `cdm/heuristica.go:160` | Não — "Tabela 1" vira `Legenda` |
+| `cdm/fallback.go:129` (LLM) | Hoje sim; **C6 veda** |
+| `estrutura.go:76` (usuário) | Hoje sim; **C5 veda** |
+| `cdm/serializacao.go:180` | Passthrough: valida faixa, não forma — legado |
+
+C6 veda nas **duas pontas**, que são condições distintas: recusar
+`j.Papel == Tabela` no lado da **escrita** (impede o LLM de marcar `Tabela` num
+`w:p`) e excluir `Papel == Tabela` do filtro de candidatos em `fallback.go:87`
+(impede o LLM de **tirar** `Tabela` de um `w:tbl`, fechando a cauda de
+`JEV_LIMITE_CONSULTA` acima de 0,95). A invariante fica **sustentada por
+construção**, sem verificação em runtime — ver pendências.
+
+### O que a pré-auditoria pegou, em quatro rodadas
+
+- **Lista branca de papéis no ruleset** (`citacao`, `referencia`, `legenda`,
+  `nota_rodape`) em vez de delegar a `ParaPapel`. Sem ela, `{"paragrafo": 1.0}`
+  produz grupo idêntico a `ReferenciasCorpo` e a segunda chamada sobrescreve a
+  primeira **em silêncio** — documento com 240 onde o perfil diz 360; e
+  `{"tabela": 1.0}` bricaria todo documento com tabela, **sem ação humana**.
+- **Duas cláusulas infalsificáveis**, o mesmo padrão do A19 do recorte anterior:
+  uma sobre `OrigemLLM` num cenário sem nenhum bloco de LLM, e o critério de
+  atomicidade com um grupo só, sendo ele o que falha — etapa que valide antes de
+  escrever nunca vaza, e o critério passava vazio.
+- **A forma do YAML não era exercitada.** `infra/ruleset/carregar.go` decodifica
+  para objeto genérico e passa por `json.Marshal`, então a tag `yaml` não
+  participa e o gate real é `rulesets/_schema.json`: nome errado de propriedade,
+  ou aninhada em `corpo`, deixaria tudo verde e o erro apareceria no recorte
+  seguinte, já dentro de arquivo imutável.
+- **Uma afirmação minha, falsa:** "C1 amplia o conjunto de candidatos ao LLM".
+  Não amplia — o bloco de recuo já era candidato (0,5 < 0,7, origem fora das
+  exclusões); C1 só troca a origem. O que o recorte faria de novo é tornar o
+  congelamento **silencioso**, ao acrescentar "DE Tabela" sem C6.
+
+---
+
 ## Medição de 16/10 — CDM classifica citação (entregue)
 
 Recorte `f3-cdm-classifica-citacao` fechado. `cdm.Citacao`, papel declarado e
@@ -1538,6 +1686,16 @@ serviço real.**
 | — | `backend/rulesets/abnt-14724/v1.yaml` é o primeiro perfil normativo rastreável (margens, corpo e entrelinha, cada valor citando a seção da NBR 14724:2024). Cobre pouco de propósito: numeração de página, filete da nota de rodapé, exceções de espaçamento simples da §5.2, NBR 10520 e NBR 6023 ficam fora, e o próprio arquivo lista isso em comentário. `fonte` aponta para a página inicial do catálogo da ABNT, não para o registro individual — a URL permanente não foi confirmada, e o schema não tem chave para registrar isso. **Não é conformidade ABNT.** |
 | MÉDIO | `abrirDocumentoPrincipal` (`internal/infra/ooxml/blocos.go:71-83`) abre `word/document.xml` sem `io.LimitReader`: `arquivo.Open()` entrega até o tamanho declarado (teto do pacote: 250 MiB) e `lerBloco` acumula todo `w:t` num `strings.Builder` mais a fatia de blocos, dando pico de centenas de MB por job concorrente. É o `io.LimitReader` que o comentário de `internal/domain/vo/formatoarquivo.go:167-171` pede desde a F2. Achado da segurança em 16/10; **preexistente**, o recorte de citação não alterou esse perfil. Soma com os dois débitos de concorrência da F7 (sem teto de job por dono, sem deadline por job). |
 | BAIXO | Leitura de `w:ind` em `lerBloco` tem a mesma limitação que `w:pStyle` já tinha: a guarda é só `tipo == TipoBlocoBrutoParagrafo`, e "o primeiro `w:ind` vence" não distingue nível de aninhamento. Um `w:p` externo sem recuo próprio que contenha `w:txbxContent`/`mc:AlternateContent` com um parágrafo recuado herda o recuo do filho e pode sair `Citacao@0.5`. Impacto é só classificação, revisável pelo usuário e pelo fallback. Correção seria exigir o `w:ind` em profundidade 2. |
+| MÉDIO | **Exposição viva, não corrigida até o recorte dos mutadores por papel:** `estrutura.go:76` reclassifica sem restrição de papel, então marcar um `w:tbl` como `paragrafo` trava o par (documento, perfil) permanentemente, porque a chave de idempotência é determinística e a fila só reivindica `pendente`. Só reupload salva. C5 do recorte planejado fecha correções novas; **índice já gravado errado continua irreparável** e o reparo pertence ao reenfileiramento com escopo de dono (F7). |
+| — | **A guarda de `Tabela` é forward-only, e o reparo do estado legado ficou fechado.** Achado do validador em 17/10: uma linha de `cdm_jsonb` em que um ordinal de `w:tbl` já foi marcado `paragrafo` pelo `PATCH` antigo continua entrando em `ReferenciasCorpo` e falhando no mutador. Desfazer exigiria marcar aquele ordinal de volta como `tabela` — exatamente o que C5 passou a recusar. Então o par (documento, perfil) legado não é reparável nem pelo dono nem pela API: só reupload. A segurança rebaixou de ALTO para BAIXO porque é **dado**, não desenho, mas o reparo depende da migração do `cdm_jsonb` ou do reenfileiramento com escopo de dono (F7). |
+| — | **Pré-condição bloqueante do `abnt-14724/v2.yaml`:** o CDM já persistido não é migrado. Linhas de `cdm_jsonb` carregam o palpite de recuo com `OrigemEstiloDocx` e podem carregar `Tabela` em `w:p` gravado antes da vedação, e `VersaoFormatoCDM` segue 1 — logo o piso não vale para documento analisado antes do deploy. Exige bump de versão do formato ou invalidação, e **qualquer bump precisa carregar a vedação junto**. |
+| — | A invariante `Tabela` ⟺ `w:tbl` passa a ser sustentada **por construção**, sem verificação em runtime: o contrato nomeia os quatro escritores de `Papel` mais o passthrough, e quem acrescentar um quinto reabre C5 e C6. Não há check barato: `Planejar` é domínio puro e não vê XML, e comparar ordinais com os `w:tbl` do pacote exigiria passe novo no executor. |
+| — | **Direção do erro do proxy da §5.2**, a herdar no recorte do v2: `cdm.Citacao` por estilo nomeado não distingue citação longa de citação curta de uma linha, e a norma pede espaço simples só acima de três linhas — contagem de linhas renderizadas, que o motor não calcula. O proxy **super-aplica**. |
+| — | `abnt-14724/v2.yaml` fica fora do recorte dos mutadores **de propósito**: enquanto nada está semeado, o nome e a forma de `entrelinha_por_papel` mudam de graça; depois de semeado o arquivo é imutável e um erro de desenho exige v3. Consequência: ao fim daquele recorte **a saída de produção não muda**, porque nenhum perfil declara a chave. |
+| BAIXO | Qualidade, não disponibilidade: reprovar o **lote** quando um julgamento traz `Papel: Tabela` derruba até 31 reclassificações legítimas do mesmo lote, que saem como `acaoRevisar`. É o mesmo degrade já aceito em `motivoClassificadorIndisponivel`; se virar incômodo medido, o caminho é recusa por julgamento. |
+| BAIXO | CPU por job no recorte dos mutadores: cada grupo reparseia `word/document.xml`, então os passes vão de 6 para 6+k, com `k` vindo do ruleset no git e não do usuário. Sem teto. |
+| — | **Fonte normativa ausente:** a NBR 10520 (tamanho e recuo de citação) segue sem fonte oficial na skill `normas-abnt`, e a §5.2.1 diz "fonte menor" sem número. Nenhum valor inferido entrou em spec ou perfil. |
+| — | Erro de validação de `entrelinha_por_papel` sai com campo `"corpo"`, mensagem enganosa para quem consome a API. Registrado em `docs/contrato-api.md` no recorte dos mutadores. |
 | — | `regioes[emCaixaAlta]` é consultado em `heuristica.go:72`, **antes** de qualquer verificação de papel: um bloco de papel DETERMINADO cujo texto seja exatamente `RESUMO`/`REFERÊNCIAS` — uma `Citacao "REFERÊNCIAS"`, por exemplo — **abre** região, e nenhum critério de A7 a A20 cobre isso. Preexistente e improvável como documento, mas é o espelho exato do defeito que C6 consertou: texto decidindo delimitação em bloco que a guarda nem alcança. Achado do testador em 16/10. |
 | — | `ehCabecalho(papelPeloTexto)` quando a numeração passa de `NivelSecaoMaximo` (`nivelPelaNumeracao` devolve false, logo `Papel{}`, logo não-cabeçalho) só é exercitado hoje por bloco `Paragrafo`. Um `Titulo "1.2.3.4.5.6.7 texto"` provaria que a guarda de C6 herda esse limite; sem o caso, mutar `nivelPelaNumeracao` para aceitar nível 7 provavelmente sobrevive dentro da guarda. |
 | — | **Decisão de desenho não declarada por contrato**, achada pelo testador em 16/10: quando um bloco de papel determinado não é cabeçalho nem tem texto de seção — uma `Citacao` dentro da região de resumo, por exemplo — `regiaoAberta` **permanece aberta** e os blocos seguintes continuam virando `Resumo`. O comportamento é plausível e é o que o código faz hoje, mas nenhum critério de A7 a A19 o fixa, então um conserto futuro pode invertê-lo sem quebrar teste nenhum. |

@@ -299,3 +299,55 @@ func TestCarregarPerfilABNT14724(t *testing.T) {
 	// rastro para humano, não dependência.
 	assert.Equal(t, "https://www.abntcatalogo.com.br/", definicao.Fonte)
 }
+
+// ---------------------------------------------------------------------------
+// RECORTE f3-mutadores-por-papel — C2, critério A14
+//
+// FORMA DO ARQUIVO, que é o que o adiamento do v2.yaml protege. O schema é o
+// gate REAL: carregar.go decodifica YAML para objeto genérico e faz
+// json.Marshal/Unmarshal, então a tag `yaml` do struct não participa da
+// leitura de perfil. Sem este critério, nome errado da propriedade ou
+// aninhamento dentro de `corpo` deixaria todos os outros critérios verdes e o
+// erro só apareceria dentro de um arquivo imutável.
+//
+// O critério afere RECUSA e a mensagem FIXA, e NÃO distingue qual gate
+// recusou: erroConteudo é a única saída de erro de Carregar, usada por schema,
+// json.Unmarshal e Definicao.Validar. A separação vem dos CENÁRIOS.
+// ---------------------------------------------------------------------------
+
+const mensagemConteudoInvalido = "conteúdo de ruleset inválido"
+
+func TestCarregarEntrelinhaPorPapelNaRaizDoArquivo(t *testing.T) {
+	require.NotContains(t, perfilSilente, "entrelinha_por_papel",
+		"pré-condição: a base do caso não declara a chave nova")
+
+	t.Run("(a) chave na RAIZ carrega", func(t *testing.T) {
+		definicao, err := Carregar([]byte(perfilSilente + "entrelinha_por_papel:\n  citacao: 1.0\n"))
+		require.NoError(t, err, "A14: prova o nome da propriedade NA RAIZ, irmã de pagina e corpo")
+		require.NoError(t, definicao.Validar())
+		assert.Equal(t, map[string]float64{"citacao": 1.0}, definicao.EntrelinhaPorPapel)
+	})
+
+	recusados := []struct {
+		nome   string
+		sufixo string
+		prova  string
+	}{
+		{"(b) medida zero", "entrelinha_por_papel:\n  citacao: 0\n", "exclusiveMinimum 0 na propriedade do papel"},
+		{"(c) medida como texto", "entrelinha_por_papel:\n  citacao: \"simples\"\n", "type number na propriedade do papel"},
+		{"(d) chave aninhada dentro de corpo", "  entrelinha_por_papel:\n    citacao: 1.0\n", "additionalProperties false em corpo"},
+		{"(e) papel fora da lista branca", "entrelinha_por_papel:\n  paragrafo: 1.0\n", "a lista branca atravessa o arquivo"},
+	}
+	for _, caso := range recusados {
+		t.Run(caso.nome, func(t *testing.T) {
+			err := exigirRejeicao(t, []byte(perfilSilente+caso.sufixo))
+
+			var alvo *erros.ErroValidacao
+			require.ErrorAs(t, err, &alvo)
+			require.NotEmpty(t, alvo.Campos)
+			assert.Equal(t, "ruleset", alvo.Campos[0].Campo, "A14: o campo é sempre \"ruleset\" (%s)", caso.prova)
+			assert.Contains(t, err.Error(), mensagemConteudoInvalido,
+				"A14: a mensagem é FIXA; causa de parser ou de schema não pode ecoar o conteúdo de origem")
+		})
+	}
+}

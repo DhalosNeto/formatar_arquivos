@@ -279,6 +279,10 @@ const (
 // bloco com Confianca < LimiteConsulta, e recuo é palpite geométrico que
 // precisa seguir aberto ao desempate do LLM — diferente do estilo nomeado,
 // que o documento DECLARA.
+//
+// Esse mesmo palpite é o motivo de o caminho do recuo gravar
+// cdm.OrigemHeuristica: confiança é quem decide se vale consultar o LLM,
+// origem é quem decide se o motor pode mutar o parágrafo.
 const confiancaRecuoCitacao = 0.5
 
 // limiarRecuoCitacaoTwips é o recuo à esquerda acima do qual um parágrafo sem
@@ -290,26 +294,37 @@ const limiarRecuoCitacaoTwips = 567
 
 const prefixoEstiloSecao = "Heading"
 
-// ClassificarPorEstiloDocx traduz um bloco bruto em entrada do CDM usando só
-// o estilo que o documento declara. Nunca falha: estilo desconhecido vira
-// Paragrafo com confiança baixa, que é um resultado legítimo, não um erro.
+// ClassificarPorEstiloDocx traduz um bloco bruto em entrada do CDM usando o
+// que o documento declara — o styleId e a forma do nó — e, só quando isso não
+// determina papel nenhum, o recuo do próprio parágrafo. Nunca falha: estilo
+// desconhecido vira Paragrafo com confiança baixa, que é um resultado
+// legítimo, não um erro.
+//
+// A ORIGEM é decidida junto do papel, não fixada na camada: estilo nomeado,
+// w:tbl e o default de estilo não reconhecido saem com cdm.OrigemEstiloDocx,
+// porque em todos esses casos o papel vem do que o documento DECLARA. "Estilo
+// não reconhecido" cobre os dois caminhos que caem no default: parágrafo sem
+// nenhum w:pStyle e parágrafo com styleId que não está no switch, como
+// "MinhaMarca". O caminho do recuo sai com cdm.OrigemHeuristica, porque recuo
+// é palpite geométrico — e é a origem que o piso de autorização do plano lê
+// para decidir se pode mutar o bloco.
 func ClassificarPorEstiloDocx(bruto BlocoBruto) cdm.Bloco {
-	papel, confianca := papelPeloEstilo(bruto)
+	papel, confianca, origem := papelPeloEstilo(bruto)
 
 	return cdm.Bloco{
 		Papel:       papel,
 		TextoResumo: resumirTexto(bruto.Texto),
 		Confianca:   confianca,
-		Origem:      cdm.OrigemEstiloDocx,
+		Origem:      origem,
 		RefXML:      bruto.Indice,
 	}
 }
 
-func papelPeloEstilo(bruto BlocoBruto) (cdm.Papel, float64) {
+func papelPeloEstilo(bruto BlocoBruto) (cdm.Papel, float64, cdm.Origem) {
 	// A forma do nó já é evidência direta: w:tbl é uma tabela independente do
 	// nome de estilo que a célula por acaso use.
 	if bruto.Tipo == TipoBlocoBrutoTabela {
-		return cdm.Tabela, confiancaEstiloConhecido
+		return cdm.Tabela, confiancaEstiloConhecido, cdm.OrigemEstiloDocx
 	}
 
 	papel, confianca := papelDoEstiloNomeado(bruto.EstiloNomeado)
@@ -318,11 +333,15 @@ func papelPeloEstilo(bruto BlocoBruto) (cdm.Papel, float64) {
 	// consultado quando o estilo não determinou outro papel — ou seja, quando
 	// o papel resultante é o default Paragrafo. Derivar evita que o portão
 	// deixe de valer em silêncio quando alguém acrescentar estilo ao switch.
+	//
+	// A confiança continua 0,5, abaixo de config.LimiteConsulta, e
+	// OrigemHeuristica não entra nas exclusões de candidato do fallback, então
+	// o bloco segue aberto ao desempate do LLM.
 	if papel == cdm.Paragrafo && bruto.RecuoEsquerdaTwips > limiarRecuoCitacaoTwips {
-		return cdm.Citacao, confiancaRecuoCitacao
+		return cdm.Citacao, confiancaRecuoCitacao, cdm.OrigemHeuristica
 	}
 
-	return papel, confianca
+	return papel, confianca, cdm.OrigemEstiloDocx
 }
 
 // papelDoEstiloNomeado traduz o styleId declarado pelo documento. Comparação

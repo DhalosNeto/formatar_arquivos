@@ -71,8 +71,22 @@ func (p Papel) Nivel() int { return p.nivel }
 // String devolve o nome do papel, sem o nível.
 func (p Papel) String() string { return p.nome }
 
-// Origem registra QUEM classificou o bloco. Importa porque correção do
-// usuário nunca é sobrescrita por reclassificação automática.
+// Origem registra QUÃO FORTE é a evidência do papel: se ele foi DECLARADO ou
+// se foi PALPITE automático. Não é a identidade da camada que escreveu —
+// OrigemHeuristica sai tanto da camada 1 (citação detectada só pelo recuo)
+// quanto da camada 2.
+//
+//	OrigemEstiloDocx — o documento DECLARA o papel: styleId reconhecido ou a
+//	                   forma do nó (w:tbl), mais o default de parágrafo sem
+//	                   estilo.
+//	OrigemHeuristica — palpite automático, de qualquer camada: recuo, região,
+//	                   regra textual.
+//	OrigemLLM        — palpite de classificador externo.
+//	OrigemUsuario    — o dono do documento confirmou.
+//
+// Importa em dois pontos: correção do usuário nunca é sobrescrita por
+// reclassificação automática, e o piso de autorização de formatador.Planejar
+// só muta bloco com OrigemEstiloDocx ou OrigemUsuario.
 type Origem string
 
 const (
