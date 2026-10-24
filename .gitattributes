@@ -1,0 +1,9 @@
+# O backend roda em container Linux e os portões da regra 10 incluem
+# `gofmt -l .`, que recusa CRLF. Com core.autocrlf=true e sem este arquivo, o
+# checkout no Windows vem em CRLF e gofmt lista TODO arquivo .go — o portão
+# nunca passa. eol=lf uniformiza working tree e repositório.
+* text=auto eol=lf
+
+# Fixtures comparadas byte a byte: nunca normalizar.
+*.docx binary
+*.svg text eol=lf
